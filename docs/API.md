@@ -18,6 +18,11 @@ sui confini del giorno **locale** dell'utente.
 | `save_text` | `{ path, content }` | — | Salva testo (es. CSV) su un percorso scelto. |
 | `daily_trend` | `{ period }` | `DayTotal[]` | Serie giornaliera attivo/focus per i grafici storici. |
 | `compare_periods` | `{ period }` | `PeriodComparison` | Confronto col periodo precedente equivalente (delta %). |
+| `meetings` | `{ period }` | `Meeting[]` | Meeting importati dal calendario (Graph). |
+| `graph_start_auth` | — | `DeviceCode` | Avvia il device code flow Microsoft (codice + URL). |
+| `graph_poll_auth` | `{ deviceCode }` | `string` | Polling autorizzazione: `"ok"` \| `"pending"` \| errore. |
+| `graph_sync` | — | `number` | Sincronizza i meeting (ultimi 7 gg + domani). |
+| `graph_disconnect` | — | — | Rimuove il refresh token e disconnette. |
 | `get_settings` | — | `Settings` | Impostazioni correnti. |
 | `save_settings` | `{ newSettings }` | — | Persiste e applica nuove impostazioni. |
 | `set_paused` | `{ paused }` | `bool` | Pausa/ripresa del tracciamento. |

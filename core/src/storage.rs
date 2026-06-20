@@ -5,7 +5,7 @@
 //! cancellarlo in qualsiasi momento (vedi `purge_before`).
 
 use crate::error::Result;
-use crate::model::{ActivitySample, Category, GitCommit, UsageRow};
+use crate::model::{ActivitySample, Category, GitCommit, Meeting, UsageRow};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 
@@ -84,9 +84,68 @@ impl Store {
                 at       TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_commits_at ON commits(at);
+
+            CREATE TABLE IF NOT EXISTS meetings (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                ext_id           TEXT NOT NULL UNIQUE,
+                subject          TEXT NOT NULL,
+                start            TEXT NOT NULL,
+                duration_seconds INTEGER NOT NULL,
+                is_online        INTEGER NOT NULL DEFAULT 0,
+                organizer        TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(start);
             "#,
         )?;
         Ok(())
+    }
+
+    /// Registra/aggiorna un meeting (idempotente per `ext_id`).
+    pub fn upsert_meeting(&self, m: &Meeting) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meetings (ext_id,subject,start,duration_seconds,is_online,organizer)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(ext_id) DO UPDATE SET
+                subject=excluded.subject,
+                start=excluded.start,
+                duration_seconds=excluded.duration_seconds,
+                is_online=excluded.is_online,
+                organizer=excluded.organizer",
+            params![
+                m.ext_id, m.subject, m.start.to_rfc3339(),
+                m.duration_seconds, m.is_online as i64, m.organizer,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Meeting in un intervallo, ordinati per inizio.
+    pub fn meetings_between(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<Meeting>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,ext_id,subject,start,duration_seconds,is_online,organizer
+             FROM meetings WHERE start >= ?1 AND start < ?2 ORDER BY start ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![from.to_rfc3339(), to.to_rfc3339()], |r| {
+                let start: String = r.get(3)?;
+                Ok(Meeting {
+                    id: Some(r.get(0)?),
+                    ext_id: r.get(1)?,
+                    subject: r.get(2)?,
+                    start: DateTime::parse_from_rfc3339(&start)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    duration_seconds: r.get(4)?,
+                    is_online: r.get::<_, i64>(5)? != 0,
+                    organizer: r.get(6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Inserisce un sample e ne restituisce l'id.
@@ -220,6 +279,10 @@ impl Store {
         )?;
         self.conn.execute(
             "DELETE FROM commits WHERE at < ?1",
+            params![cutoff.to_rfc3339()],
+        )?;
+        self.conn.execute(
+            "DELETE FROM meetings WHERE start < ?1",
             params![cutoff.to_rfc3339()],
         )?;
         Ok(n)

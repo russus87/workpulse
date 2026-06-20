@@ -7,7 +7,7 @@
 //! ingresso che un generatore LLM potrebbe ricevere al posto del template.
 
 use crate::aggregate::{human_duration, metrics};
-use crate::model::{ActivitySample, Category, GitCommit};
+use crate::model::{ActivitySample, Category, GitCommit, Meeting};
 use regex::Regex;
 
 /// Dati sintetici di una giornata: l'input sia per il template sia (in futuro)
@@ -15,6 +15,8 @@ use regex::Regex;
 pub struct SummaryInput<'a> {
     pub samples: &'a [ActivitySample],
     pub commits: &'a [GitCommit],
+    /// Meeting reali (da calendario). Se vuoto, il conteggio ricade sull'euristica.
+    pub meetings: &'a [Meeting],
 }
 
 /// Progetto su cui si e' speso piu' tempo, con i relativi secondi.
@@ -35,8 +37,12 @@ fn count_bugfix(commits: &[GitCommit]) -> usize {
     commits.iter().filter(|c| re.is_match(&c.message)).count()
 }
 
-/// Numero di meeting: blocchi di comunicazione "lunghi" (>= 10 minuti).
-fn count_meetings(samples: &[ActivitySample]) -> usize {
+/// Numero di meeting. Se sono disponibili meeting reali dal calendario li usa;
+/// altrimenti ricade sull'euristica (blocchi di comunicazione >= 10 minuti).
+fn count_meetings(samples: &[ActivitySample], meetings: &[Meeting]) -> usize {
+    if !meetings.is_empty() {
+        return meetings.len();
+    }
     samples
         .iter()
         .filter(|s| matches!(s.category, Category::Communication) && s.seconds >= 600)
@@ -81,7 +87,7 @@ pub fn daily_summary(input: &SummaryInput) -> String {
         parts.push(format!("effettuato {} commit", input.commits.len()));
     }
 
-    let meetings = count_meetings(input.samples);
+    let meetings = count_meetings(input.samples, input.meetings);
     if meetings > 0 {
         parts.push(format!("partecipato a {} meeting", meetings));
     }
@@ -158,6 +164,7 @@ mod tests {
         let out = daily_summary(&SummaryInput {
             samples: &samples,
             commits: &commits,
+            meetings: &[],
         });
         assert!(out.contains("progetto PAM"));
         assert!(out.contains("2 bug"));

@@ -28,8 +28,9 @@ Obiettivo: dati piu' ricchi e accurati tramite integrazioni dirette.
       (oggi dedotti dal titolo finestra).
 - [ ] **Jira**: connettore API (OAuth) per stato/titolo ticket, mappatura
       progetto↔cliente automatica, tempo per stato del ticket.
-- [ ] **Outlook Calendar** e **Teams**: meeting reali (durata, partecipanti,
-      titolo) via Microsoft Graph → distinzione meeting vs focus.
+- [x] **Outlook Calendar / Teams**: meeting reali (durata, titolo, organizzatore,
+      online sì/no) via Microsoft Graph (device code flow, `Calendars.Read`).
+      Vedi [INTEGRATIONS.md](INTEGRATIONS.md). [ ] Teams presence/canali.
 - [ ] **Slack**: presenza/canali via API per quantificare la comunicazione.
 - [x] Idle/AFK detection nativa (vedi MVP). [ ] Unione automatica di sample contigui.
 - [x] Trend di produttivita' (serie giornaliera, confronto col periodo precedente).

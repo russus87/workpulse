@@ -90,6 +90,22 @@ pub struct GitCommit {
     pub at: DateTime<Utc>,
 }
 
+/// Un meeting importato da un calendario esterno (es. Outlook/Teams via Graph).
+/// Tenuto separato dai `samples` per non raddoppiare il tempo gia' tracciato
+/// dalla finestra attiva: serve a contare e contestualizzare le riunioni.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Meeting {
+    pub id: Option<i64>,
+    /// Id esterno dell'evento (per l'idempotenza degli import).
+    pub ext_id: String,
+    pub subject: String,
+    pub start: DateTime<Utc>,
+    pub duration_seconds: i64,
+    /// Riunione online (Teams/Meet) vs in presenza.
+    pub is_online: bool,
+    pub organizer: Option<String>,
+}
+
 /// Riga di un report di utilizzo: "X secondi su questa chiave".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageRow {

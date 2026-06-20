@@ -119,9 +119,11 @@ pub fn today_summary_text(state: &Arc<AppState>) -> String {
     };
     let samples = store.samples_between(from, to).unwrap_or_default();
     let commits = store.commits_between(from, to).unwrap_or_default();
+    let meetings = store.meetings_between(from, to).unwrap_or_default();
     summary::daily_summary(&SummaryInput {
         samples: &samples,
         commits: &commits,
+        meetings: &meetings,
     })
 }
 

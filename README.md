@@ -36,9 +36,11 @@ telemetria, nessun invio remoto.
   best-effort via strumenti di sistema — vedi [`capture.rs`](src-tauri/src/capture.rs)).
 - **Git**: branch corrente e commit dei repo locali configurati (filtrati per
   autore) — vedi [`git.rs`](core/src/git.rs).
-- **Browser / Jira / Outlook / Teams / Slack**: dedotti dal titolo finestra e
-  dagli URL nella v0; connettori dedicati (API) previsti in **V1/V2** — vedi la
-  [Roadmap](docs/ROADMAP.md).
+- **Outlook Calendar / Teams**: meeting reali (durata, titolo, online sì/no) via
+  **Microsoft Graph** (device code flow, `Calendars.Read`) — vedi
+  [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+- **Browser / Jira / Slack**: dedotti dal titolo finestra e dagli URL; connettori
+  API dedicati previsti in **V1/V2** — vedi la [Roadmap](docs/ROADMAP.md).
 
 ## Architettura
 

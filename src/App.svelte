@@ -1,5 +1,6 @@
 <script>
   import { save } from "@tauri-apps/plugin-dialog";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { api, humanDuration } from "./lib/api.js";
   import Bars from "./components/Bars.svelte";
 
@@ -18,7 +19,12 @@
   let sheet = $state([]);
   let trend = $state([]);
   let comparison = $state(null);
+  let meetingList = $state([]);
   let settings = $state(null);
+  // Stato del flusso di connessione Microsoft Graph.
+  let graphDevice = $state(null);
+  let graphMsg = $state("");
+  let graphPoll = null;
   let paused = $state(false);
   let error = $state("");
 
@@ -45,6 +51,7 @@
           api.dailyTrend(period),
           api.comparePeriods(period),
         ]);
+      meetingList = await api.meetings(period).catch(() => []);
     } catch (e) {
       error = String(e);
     }
@@ -91,6 +98,56 @@
   function deltaLabel(c) {
     if (!c || c.delta_pct === null || c.delta_pct === undefined) return "—";
     return (c.delta_pct >= 0 ? "+" : "") + c.delta_pct + "%";
+  }
+
+  // --- Connessione Microsoft 365 (Graph) tramite device code flow ---
+  async function connectGraph() {
+    error = "";
+    try {
+      await api.saveSettings(settings); // assicura client_id/tenant salvati
+      const dc = await api.graphStartAuth();
+      graphDevice = dc;
+      graphMsg = dc.message;
+      try { await openUrl(dc.verification_uri); } catch {}
+      // Polling fino ad autorizzazione o errore.
+      if (graphPoll) clearInterval(graphPoll);
+      graphPoll = setInterval(async () => {
+        try {
+          const r = await api.graphPollAuth(dc.device_code);
+          if (r === "ok") {
+            clearInterval(graphPoll);
+            graphDevice = null;
+            graphMsg = "Connesso ✓ — sincronizzo i meeting…";
+            await loadSettings();
+            await syncGraph();
+          }
+        } catch (e) {
+          clearInterval(graphPoll);
+          graphDevice = null;
+          graphMsg = "Errore: " + e;
+        }
+      }, (dc.interval || 5) * 1000);
+    } catch (e) {
+      graphMsg = "Errore: " + e;
+    }
+  }
+
+  async function syncGraph() {
+    try {
+      const n = await api.graphSync();
+      graphMsg = `Sincronizzati ${n} meeting.`;
+      refresh();
+    } catch (e) {
+      graphMsg = "Errore sync: " + e;
+    }
+  }
+
+  async function disconnectGraph() {
+    if (graphPoll) clearInterval(graphPoll);
+    graphDevice = null;
+    await api.graphDisconnect();
+    await loadSettings();
+    graphMsg = "Disconnesso.";
   }
 
   // Carica i dati all'avvio.
@@ -165,6 +222,25 @@
         <div class="card"><h3>Tempo per cliente</h3><Bars rows={byClient} /></div>
         <div class="card"><h3>Tempo per ticket</h3><Bars rows={byTicket} green /></div>
       </div>
+
+      {#if meetingList.length}
+        <div class="card" style="margin-top:16px">
+          <h3>Meeting da calendario ({meetingList.length})</h3>
+          <table>
+            <thead><tr><th>Orario</th><th>Titolo</th><th>Durata</th><th>Tipo</th></tr></thead>
+            <tbody>
+              {#each meetingList as m}
+                <tr>
+                  <td>{new Date(m.start).toLocaleString()}</td>
+                  <td>{m.subject}</td>
+                  <td>{humanDuration(m.duration_seconds)}</td>
+                  <td>{m.is_online ? "🟢 online" : "🏢 presenza"}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
     {/if}
 
     {#if view === "journal"}
@@ -287,9 +363,47 @@
               🗑️ Applica retention ora
             </button>
           </div>
+          <hr style="border-color:var(--border); margin:18px 0" />
+          <h3>🔗 Microsoft 365 (Outlook / Teams)</h3>
+          <p class="muted" style="margin-top:0">
+            Importa i meeting reali dal calendario. Serve un'app Azure AD (public
+            client) con permesso <code>Calendars.Read</code>: incolla qui il suo
+            <em>client_id</em>. L'autorizzazione avviene una sola volta dal browser.
+          </p>
+          <label class="field">
+            <span>Client ID (app Azure AD)</span>
+            <input bind:value={settings.graph_client_id} placeholder="00000000-0000-0000-0000-000000000000" />
+          </label>
+          <label class="field">
+            <span>Tenant (organizations | common | GUID)</span>
+            <input bind:value={settings.graph_tenant} />
+          </label>
+          <div class="row">
+            {#if settings.graph_refresh_token}
+              <span class="tag" style="border-color:var(--accent-2)">✓ Connesso</span>
+              <button class="btn ghost" onclick={syncGraph}>🔄 Sincronizza meeting</button>
+              <button class="btn ghost" onclick={disconnectGraph}>Disconnetti</button>
+            {:else}
+              <button class="btn" onclick={connectGraph}>🔗 Connetti Microsoft 365</button>
+            {/if}
+          </div>
+          {#if graphDevice}
+            <div class="summary" style="margin-top:12px">
+              <span class="label">Autorizzazione</span>
+              <div>{graphDevice.message}</div>
+              <div class="row" style="margin-top:8px">
+                <span class="tag" style="font-size:16px; letter-spacing:2px">{graphDevice.user_code}</span>
+                <button class="btn ghost" onclick={() => openUrl(graphDevice.verification_uri)}>Apri pagina di login</button>
+              </div>
+            </div>
+          {:else if graphMsg}
+            <p class="muted">{graphMsg}</p>
+          {/if}
+
           <p class="muted" style="margin-top:14px">
             🔒 Privacy by design: tutti i dati restano in locale sul tuo dispositivo.
-            Nessuna telemetria, nessun invio remoto.
+            Nessuna telemetria, nessun invio remoto. Il connettore Microsoft usa
+            il device code flow (nessun client secret) e salva solo il refresh token.
           </p>
         {:else}
           <p class="muted">Caricamento…</p>

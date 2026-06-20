@@ -24,6 +24,14 @@ pub struct Settings {
     pub daily_summary: bool,
     /// Ora locale (0-23) a partire dalla quale inviare il riepilogo giornaliero.
     pub daily_summary_hour: u32,
+    /// Connettore Microsoft Graph (Outlook/Teams) attivo.
+    pub graph_enabled: bool,
+    /// `client_id` dell'app Azure AD registrata dall'utente (public client).
+    pub graph_client_id: String,
+    /// Tenant Azure AD ("organizations" | "common" | GUID del tenant).
+    pub graph_tenant: String,
+    /// Refresh token salvato dopo l'autorizzazione (vuoto = non connesso).
+    pub graph_refresh_token: String,
     /// Regole di classificazione (categorie app, mappa progetto->cliente).
     pub rules: Rules,
 }
@@ -39,6 +47,10 @@ impl Default for Settings {
             autostart: false,
             daily_summary: true,
             daily_summary_hour: 18,
+            graph_enabled: false,
+            graph_client_id: String::new(),
+            graph_tenant: "organizations".into(),
+            graph_refresh_token: String::new(),
             rules: Rules::default(),
         }
     }

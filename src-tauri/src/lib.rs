@@ -4,6 +4,7 @@
 //! in stringhe leggibili per il frontend.
 
 mod capture;
+mod graph;
 mod settings;
 mod tracker;
 
@@ -17,7 +18,7 @@ use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use tracker::AppState;
 use workpulse_core::aggregate;
-use workpulse_core::model::{JournalEntry, ProductivityMetrics, UsageRow};
+use workpulse_core::model::{JournalEntry, Meeting, ProductivityMetrics, UsageRow};
 use workpulse_core::report::csv_line;
 use workpulse_core::storage::Dimension;
 use workpulse_core::summary::{self, SummaryInput};
@@ -95,10 +96,20 @@ fn ai_summary(state: tauri::State<Arc<AppState>>, period: String) -> Result<Stri
     let store = state.store.lock().map_err(err)?;
     let samples = store.samples_between(from, to).map_err(err)?;
     let commits = store.commits_between(from, to).map_err(err)?;
+    let meetings = store.meetings_between(from, to).map_err(err)?;
     Ok(summary::daily_summary(&SummaryInput {
         samples: &samples,
         commits: &commits,
+        meetings: &meetings,
     }))
+}
+
+/// Meeting (da calendario) nel periodo.
+#[tauri::command]
+fn meetings(state: tauri::State<Arc<AppState>>, period: String) -> Result<Vec<Meeting>, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    store.meetings_between(from, to).map_err(err)
 }
 
 /// Work Journal del periodo: una voce per progetto con tempo, ticket e commit.
@@ -261,6 +272,83 @@ fn purge(state: tauri::State<Arc<AppState>>, days: i64) -> Result<usize, String>
     store.purge_before(cutoff).map_err(err)
 }
 
+// ---- Connettore Microsoft Graph (Outlook/Teams) ----
+
+/// Avvia il device code flow: ritorna il codice/URL da mostrare all'utente.
+#[tauri::command]
+fn graph_start_auth(state: tauri::State<Arc<AppState>>) -> Result<graph::DeviceCode, String> {
+    let (client_id, tenant) = {
+        let s = state.settings.lock().map_err(err)?;
+        (s.graph_client_id.clone(), s.graph_tenant.clone())
+    };
+    if client_id.is_empty() {
+        return Err("Imposta prima il client_id dell'app Azure AD.".into());
+    }
+    graph::start_device_code(&client_id, &tenant)
+}
+
+/// Esegue un giro di polling del token. Ritorna "ok" | "pending" | messaggio errore.
+#[tauri::command]
+fn graph_poll_auth(
+    state: tauri::State<Arc<AppState>>,
+    device_code: String,
+) -> Result<String, String> {
+    let (client_id, tenant) = {
+        let s = state.settings.lock().map_err(err)?;
+        (s.graph_client_id.clone(), s.graph_tenant.clone())
+    };
+    match graph::poll_token(&client_id, &tenant, &device_code) {
+        graph::Poll::Pending => Ok("pending".into()),
+        graph::Poll::Failed(m) => Err(m),
+        graph::Poll::Done(_access, refresh) => {
+            let refresh = refresh.ok_or("nessun refresh token ricevuto")?;
+            let mut s = state.settings.lock().map_err(err)?;
+            s.graph_refresh_token = refresh;
+            s.graph_enabled = true;
+            s.save().map_err(err)?;
+            Ok("ok".into())
+        }
+    }
+}
+
+/// Sincronizza i meeting dal calendario (ultimi 7 giorni + domani). Ritorna il numero importato.
+#[tauri::command]
+fn graph_sync(state: tauri::State<Arc<AppState>>) -> Result<usize, String> {
+    let (client_id, tenant, refresh) = {
+        let s = state.settings.lock().map_err(err)?;
+        (s.graph_client_id.clone(), s.graph_tenant.clone(), s.graph_refresh_token.clone())
+    };
+    if refresh.is_empty() {
+        return Err("Connettore non autorizzato. Esegui prima la connessione.".into());
+    }
+    let (access, new_refresh) = graph::refresh_access_token(&client_id, &tenant, &refresh)?;
+    if let Some(nr) = new_refresh {
+        let mut s = state.settings.lock().map_err(err)?;
+        s.graph_refresh_token = nr;
+        let _ = s.save();
+    }
+    let from = Utc::now() - Duration::days(7);
+    let to = Utc::now() + Duration::days(1);
+    let meetings = graph::fetch_meetings(&access, from, to)?;
+    let store = state.store.lock().map_err(err)?;
+    let mut n = 0;
+    for m in &meetings {
+        if store.upsert_meeting(m).is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Disconnette il connettore Graph (rimuove il refresh token salvato).
+#[tauri::command]
+fn graph_disconnect(state: tauri::State<Arc<AppState>>) -> Result<(), String> {
+    let mut s = state.settings.lock().map_err(err)?;
+    s.graph_refresh_token.clear();
+    s.graph_enabled = false;
+    s.save().map_err(err)
+}
+
 /// Abilita/disabilita l'avvio automatico al login.
 fn apply_autostart(app: &tauri::AppHandle, enable: bool) {
     let mgr = app.autolaunch();
@@ -318,6 +406,11 @@ pub fn run() {
             save_text,
             daily_trend,
             compare_periods,
+            meetings,
+            graph_start_auth,
+            graph_poll_auth,
+            graph_sync,
+            graph_disconnect,
             get_settings,
             save_settings,
             set_paused,
