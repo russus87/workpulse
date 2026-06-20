@@ -376,6 +376,36 @@ fn graph_disconnect(state: tauri::State<Arc<AppState>>) -> Result<(), String> {
     s.save().map_err(err)
 }
 
+// ---- Attivita' Teams (presence) ----
+
+#[derive(Serialize)]
+struct TeamsActivity {
+    /// Tempo per stato Teams (InACall, InAMeeting, Presenting, Available, ...).
+    rows: Vec<UsageRow>,
+    /// Tempo totale in chiamata/riunione/presenting.
+    in_call_seconds: i64,
+    /// Il connettore e' collegato?
+    connected: bool,
+}
+
+/// Ripartizione del tempo sugli stati Teams nel periodo (da Presence API).
+#[tauri::command]
+fn teams_activity(
+    state: tauri::State<Arc<AppState>>,
+    period: String,
+) -> Result<TeamsActivity, String> {
+    let (from, to) = range(&period);
+    let connected = !state.settings.lock().map_err(err)?.graph_refresh_token.is_empty();
+    let store = state.store.lock().map_err(err)?;
+    let rows = store.presence_by_activity(from, to).map_err(err)?;
+    let in_call_seconds = rows
+        .iter()
+        .filter(|r| graph::is_in_call(&r.key))
+        .map(|r| r.seconds)
+        .sum();
+    Ok(TeamsActivity { rows, in_call_seconds, connected })
+}
+
 // ---- Fatturazione ----
 
 #[derive(Serialize)]
@@ -689,6 +719,7 @@ pub fn run() {
             graph_poll_auth,
             graph_sync,
             graph_disconnect,
+            teams_activity,
             billing,
             standup_text,
             languages,

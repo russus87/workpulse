@@ -118,9 +118,51 @@ impl Store {
                 organizer        TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(start);
+
+            CREATE TABLE IF NOT EXISTS presence (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                availability TEXT NOT NULL,
+                activity     TEXT NOT NULL,
+                start        TEXT NOT NULL,
+                seconds      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_presence_start ON presence(start);
             "#,
         )?;
         Ok(())
+    }
+
+    /// Registra un campione di presence Teams (stato osservato per `seconds`).
+    pub fn insert_presence(
+        &self,
+        availability: &str,
+        activity: &str,
+        at: DateTime<Utc>,
+        seconds: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO presence (availability,activity,start,seconds) VALUES (?1,?2,?3,?4)",
+            params![availability, activity, at.to_rfc3339(), seconds],
+        )?;
+        Ok(())
+    }
+
+    /// Tempo per stato Teams (`activity`) in un intervallo, dal piu' lungo.
+    pub fn presence_by_activity(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<Vec<UsageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT activity, SUM(seconds) FROM presence
+             WHERE start >= ?1 AND start < ?2 GROUP BY activity ORDER BY 2 DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![from.to_rfc3339(), to.to_rfc3339()], |r| {
+                Ok(UsageRow { key: r.get(0)?, seconds: r.get(1)? })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Registra/aggiorna un meeting (idempotente per `ext_id`).
@@ -367,6 +409,10 @@ impl Store {
         )?;
         self.conn.execute(
             "DELETE FROM meetings WHERE start < ?1",
+            params![cutoff.to_rfc3339()],
+        )?;
+        self.conn.execute(
+            "DELETE FROM presence WHERE start < ?1",
             params![cutoff.to_rfc3339()],
         )?;
         Ok(n)

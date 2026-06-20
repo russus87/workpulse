@@ -10,10 +10,15 @@ contestualizzarli con precisione, al posto della sola euristica sui titoli fines
 - **Auth**: OAuth 2.0 **Device Code Flow** (public client, *nessun client secret*).
   Autorizzi una volta dal browser con un codice; WorkPulse salva solo il
   `refresh_token` (in locale) per i sync successivi.
-- **Permesso minimo**: `Calendars.Read` (+ `offline_access` per il refresh).
-- **Dati letti**: oggetto, inizio/fine, se la riunione e' online, organizzatore.
-  I meeting stanno in una tabella separata (`meetings`) per **non raddoppiare**
-  il tempo gia' tracciato dalla finestra attiva.
+- **Permessi**: `Calendars.Read` (meeting) + `Presence.Read` (attività Teams),
+  più `offline_access` per il refresh.
+- **Dati letti**:
+  - *Meeting* (calendarView): oggetto, inizio/fine, online sì/no, organizzatore.
+    Stanno in una tabella separata (`meetings`) per **non raddoppiare** il tempo.
+  - *Attività Teams* (Presence API): WorkPulse fa **polling di `/me/presence`**
+    circa ogni minuto e registra lo stato (`InACall`, `InAMeeting`, `Presenting`,
+    `Busy`, `Available`, `Away`, `DoNotDisturb`, …) nella tabella `presence`,
+    costruendo la timeline → **tempo in call/meeting/presenting**.
 
 ### Setup (una tantum) dell'app Azure AD
 
@@ -23,8 +28,12 @@ contestualizzarli con precisione, al posto della sola euristica sui titoli fines
 3. In **Authentication** → *Advanced settings* → **Allow public client flows** = **Sì**
    (necessario per il device code flow).
 4. In **API permissions** → *Add a permission* → *Microsoft Graph* →
-   *Delegated* → **Calendars.Read**. (Aggiungi consenso se richiesto.)
+   *Delegated* → **Calendars.Read** e **Presence.Read**. (Consenso se richiesto.)
 5. Copia il **Application (client) ID**.
+
+> Se ti eri già connesso prima dell'aggiunta di `Presence.Read`, premi di nuovo
+> **Connetti** in WorkPulse per concedere il nuovo permesso. La presence Teams è
+> attivabile/disattivabile dall'apposito interruttore nelle Impostazioni.
 
 ### In WorkPulse
 

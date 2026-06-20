@@ -20,6 +20,7 @@
   let trend = $state([]);
   let comparison = $state(null);
   let meetingList = $state([]);
+  let teams = $state(null);
   let bill = $state(null);
   let langs = $state([]);
   let codeStats = $state(null);
@@ -61,6 +62,7 @@
           api.comparePeriods(period),
         ]);
       meetingList = await api.meetings(period).catch(() => []);
+      teams = await api.teamsActivity(period).catch(() => null);
       [bill, langs, codeStats, heatCells, suggList, idleList] = await Promise.all([
         api.billing(period).catch(() => null),
         api.languages(period).catch(() => []),
@@ -366,6 +368,20 @@
               {/each}
             </tbody>
           </table>
+        </div>
+      {/if}
+
+      {#if teams && teams.connected}
+        <div class="card" style="margin-top:16px">
+          <div class="row" style="justify-content:space-between">
+            <h3 style="margin:0">Attività Teams</h3>
+            <span class="tag" style="border-color:var(--accent)">In call/meeting: {humanDuration(teams.in_call_seconds)}</span>
+          </div>
+          {#if teams.rows.length}
+            <div style="margin-top:12px"><Bars rows={teams.rows} /></div>
+          {:else}
+            <p class="muted">Nessun dato di presence ancora. Resta connesso: WorkPulse campiona Teams ~ogni minuto.</p>
+          {/if}
         </div>
       {/if}
 
@@ -707,6 +723,15 @@
               <button class="btn" onclick={connectGraph}>🔗 Connetti Microsoft 365</button>
             {/if}
           </div>
+          <label class="field row" style="gap:8px; align-items:center; margin-top:10px">
+            <input type="checkbox" style="width:auto" bind:checked={settings.track_presence} />
+            <span style="margin:0">Traccia attività Teams (presence: tempo in call/meeting/presenting)</span>
+          </label>
+          <p class="muted" style="margin-top:0">
+            Richiede il permesso <code>Presence.Read</code> sull'app Azure AD. Se ti
+            sei connesso prima di questa funzione, premi <em>Connetti</em> di nuovo
+            per concedere il nuovo permesso.
+          </p>
           {#if graphDevice}
             <div class="summary" style="margin-top:12px">
               <span class="label">Autorizzazione</span>

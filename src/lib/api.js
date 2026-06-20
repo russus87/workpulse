@@ -27,6 +27,7 @@ export const api = {
   graphPollAuth: (deviceCode) => call("graph_poll_auth", { deviceCode }),
   graphSync: () => call("graph_sync"),
   graphDisconnect: () => call("graph_disconnect"),
+  teamsActivity: (period) => call("teams_activity", { period }),
   billing: (period) => call("billing", { period }),
   standupText: (period) => call("standup_text", { period }),
   languages: (period) => call("languages", { period }),

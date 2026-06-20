@@ -7,6 +7,7 @@
 //! (un `Store` protetto da Mutex) e l'`AppHandle` di Tauri (per le notifiche).
 
 use crate::capture;
+use crate::graph;
 use crate::settings::Settings;
 use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
 use std::sync::{Arc, Mutex};
@@ -33,6 +34,8 @@ pub struct AppState {
     pub focus_until: Mutex<Option<chrono::DateTime<Utc>>>,
     /// Ultimo giorno in cui e' stato inviato il nudge "troppa comunicazione".
     pub last_comm_nudge_day: Mutex<Option<String>>,
+    /// Access token Graph in cache con relativa scadenza (per il polling presence).
+    pub graph_access: Mutex<Option<(String, chrono::DateTime<Utc>)>>,
 }
 
 impl AppState {
@@ -46,6 +49,7 @@ impl AppState {
             last_summary_day: Mutex::new(None),
             focus_until: Mutex::new(None),
             last_comm_nudge_day: Mutex::new(None),
+            graph_access: Mutex::new(None),
         }
     }
 
@@ -79,6 +83,7 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
         let mut ticks: u64 = 0;
         let mut active_streak: i64 = 0; // secondi attivi consecutivi senza pausa
         let mut focus_done_notified = true;
+        let mut presence_accum: i64 = 0; // secondi accumulati per il polling presence
         loop {
             thread::sleep(Duration::from_secs(interval as u64));
             ticks += 1;
@@ -133,6 +138,13 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
                 }
             }
 
+            // Presence Teams: polling ogni ~60s (token in cache).
+            presence_accum += interval;
+            if presence_accum >= 60 {
+                poll_presence(&state, presence_accum);
+                presence_accum = 0;
+            }
+
             // Nudge "troppa comunicazione" (una volta al giorno).
             maybe_comm_nudge(&app, &state, comm_limit);
 
@@ -147,6 +159,57 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
             maybe_daily_summary(&app, &state);
         }
     });
+}
+
+/// Restituisce un access token Graph valido (dalla cache o via refresh).
+/// Aggiorna anche il refresh token salvato se Microsoft ne emette uno nuovo.
+pub fn graph_access_token(state: &Arc<AppState>) -> Option<String> {
+    {
+        let g = state.graph_access.lock().unwrap();
+        if let Some((t, exp)) = &*g {
+            if *exp > Utc::now() + chrono::Duration::seconds(60) {
+                return Some(t.clone());
+            }
+        }
+    }
+    let (cid, tenant, refresh) = {
+        let s = state.settings.lock().unwrap();
+        (s.graph_client_id.clone(), s.graph_tenant.clone(), s.graph_refresh_token.clone())
+    };
+    if refresh.is_empty() {
+        return None;
+    }
+    match graph::refresh_access_token(&cid, &tenant, &refresh) {
+        Ok((access, new_refresh)) => {
+            if let Some(nr) = new_refresh {
+                let mut s = state.settings.lock().unwrap();
+                s.graph_refresh_token = nr;
+                let _ = s.save();
+            }
+            let exp = Utc::now() + chrono::Duration::minutes(50);
+            *state.graph_access.lock().unwrap() = Some((access.clone(), exp));
+            Some(access)
+        }
+        Err(_) => None,
+    }
+}
+
+/// Registra la presence Teams corrente (best-effort) per `seconds`.
+fn poll_presence(state: &Arc<AppState>, seconds: i64) {
+    let (connected, track) = {
+        let s = state.settings.lock().unwrap();
+        (!s.graph_refresh_token.is_empty(), s.track_presence)
+    };
+    if !(connected && track) {
+        return;
+    }
+    if let Some(token) = graph_access_token(state) {
+        if let Ok((avail, activity)) = graph::fetch_presence(&token) {
+            if let Ok(store) = state.store.lock() {
+                let _ = store.insert_presence(&avail, &activity, Utc::now(), seconds);
+            }
+        }
+    }
 }
 
 /// Importa i commit recenti (ultime 24h) dai repo configurati.

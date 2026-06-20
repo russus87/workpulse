@@ -33,6 +33,8 @@ pub struct Settings {
     pub graph_tenant: String,
     /// Refresh token salvato dopo l'autorizzazione (vuoto = non connesso).
     pub graph_refresh_token: String,
+    /// Traccia la presence Teams (tempo in call/meeting/presenting) via polling.
+    pub track_presence: bool,
     /// Tariffe orarie per la fatturazione (default + override per cliente/progetto).
     pub rates: Rates,
     /// Arrotondamento della fatturazione in minuti (0 = nessuno).
@@ -78,6 +80,7 @@ impl Default for Settings {
             graph_client_id: String::new(),
             graph_tenant: "organizations".into(),
             graph_refresh_token: String::new(),
+            track_presence: true,
             rates: Rates::default(),
             billing_round_minutes: 15,
             pomodoro_minutes: 25,

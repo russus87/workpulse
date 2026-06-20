@@ -1,6 +1,6 @@
 [package]
 name = "workpulse"
-version = "0.2.0"
+version = "0.2.1"
 description = "WorkPulse - tracciamento automatico del lavoro: tempo per progetto/ticket/cliente, work journal e riepiloghi"
 authors = ["Antonio Russo"]
 license = "MIT"

@@ -30,7 +30,9 @@ Obiettivo: dati piu' ricchi e accurati tramite integrazioni dirette.
       progetto↔cliente automatica, tempo per stato del ticket.
 - [x] **Outlook Calendar / Teams**: meeting reali (durata, titolo, organizzatore,
       online sì/no) via Microsoft Graph (device code flow, `Calendars.Read`).
-      Vedi [INTEGRATIONS.md](INTEGRATIONS.md). [ ] Teams presence/canali.
+- [x] **Teams presence**: timeline degli stati (tempo in call/meeting/presenting)
+      via polling di `/me/presence` (`Presence.Read`).
+      Vedi [INTEGRATIONS.md](INTEGRATIONS.md). [ ] Conteggio messaggi/canali (Chat.Read).
 - [ ] **Slack**: presenza/canali via API per quantificare la comunicazione.
 - [x] Idle/AFK detection nativa (vedi MVP) + **riconciliazione** dei blocchi idle.
 - [x] Trend di produttivita' (serie giornaliera, confronto col periodo precedente)

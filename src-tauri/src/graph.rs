@@ -14,7 +14,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Deserialize;
 use workpulse_core::model::Meeting;
 
-const SCOPE: &str = "offline_access Calendars.Read";
+const SCOPE: &str = "offline_access Calendars.Read Presence.Read";
 
 fn authority(tenant: &str) -> String {
     let t = if tenant.is_empty() { "organizations" } else { tenant };
@@ -129,6 +129,42 @@ pub fn fetch_meetings(
         .into_string()
         .map_err(|e| e.to_string())?;
     parse_calendar_view(&body)
+}
+
+// ----- Teams presence -----
+
+#[derive(Debug, Deserialize)]
+struct PresenceResp {
+    availability: Option<String>,
+    activity: Option<String>,
+}
+
+/// Stato Teams: (availability, activity). Es. ("Busy", "InACall").
+pub fn parse_presence(json: &str) -> Result<(String, String), String> {
+    let p: PresenceResp = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    Ok((
+        p.availability.unwrap_or_else(|| "Unknown".into()),
+        p.activity.unwrap_or_else(|| "Unknown".into()),
+    ))
+}
+
+/// Legge la presence corrente dell'utente (richiede scope `Presence.Read`).
+pub fn fetch_presence(access_token: &str) -> Result<(String, String), String> {
+    let body = ureq::get("https://graph.microsoft.com/v1.0/me/presence")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .call()
+        .map_err(stringify_err)?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    parse_presence(&body)
+}
+
+/// Vero se l'`activity` Teams indica una chiamata/riunione attiva.
+pub fn is_in_call(activity: &str) -> bool {
+    matches!(
+        activity,
+        "InACall" | "InAConferenceCall" | "InAMeeting" | "Presenting" | "OnThePhone"
+    )
 }
 
 // ----- Parsing puro (testabile senza rete) -----
@@ -248,5 +284,15 @@ mod tests {
         assert_eq!(meetings[1].duration_seconds, 3600);
         assert!(!meetings[1].is_online);
         assert!(meetings[1].organizer.is_none());
+    }
+
+    #[test]
+    fn parsing_presence() {
+        let (avail, activity) =
+            parse_presence(r#"{"availability":"Busy","activity":"InACall"}"#).unwrap();
+        assert_eq!(avail, "Busy");
+        assert_eq!(activity, "InACall");
+        assert!(is_in_call(&activity));
+        assert!(!is_in_call("Available"));
     }
 }
