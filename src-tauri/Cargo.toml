@@ -1,6 +1,6 @@
 [package]
 name = "workpulse"
-version = "0.1.0"
+version = "0.1.1"
 description = "WorkPulse - tracciamento automatico del lavoro: tempo per progetto/ticket/cliente, work journal e riepiloghi"
 authors = ["Antonio Russo"]
 license = "MIT"
@@ -22,11 +22,12 @@ log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 # Cartella dati per-utente (dove vive il DB SQLite locale).
 dirs = "5"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-process = "2"
+tauri-plugin-autostart = "2"
 # La logica vera (tracking, storage, report) vive nel crate "core".
 workpulse-core = { path = "../core" }

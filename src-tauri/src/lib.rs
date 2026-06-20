@@ -11,11 +11,17 @@ use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Utc};
 use serde::Serialize;
 use settings::Settings;
 use std::sync::Arc;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
+use tauri_plugin_autostart::ManagerExt;
 use tracker::AppState;
 use workpulse_core::aggregate;
 use workpulse_core::model::{JournalEntry, ProductivityMetrics, UsageRow};
+use workpulse_core::report::csv_line;
 use workpulse_core::storage::Dimension;
 use workpulse_core::summary::{self, SummaryInput};
+use workpulse_core::trends::{self, Comparison, DayTotal};
 
 /// Converte un errore in stringa per la UI.
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -114,21 +120,18 @@ struct TimesheetDay {
     total_seconds: i64,
 }
 
-/// Timesheet del periodo, giorno per giorno, ripartito per progetto.
-#[tauri::command]
-fn timesheet(
-    state: tauri::State<Arc<AppState>>,
-    period: String,
+/// Costruisce le righe di timesheet (riusato da `timesheet` ed `export_csv`).
+fn timesheet_rows(
+    state: &tauri::State<Arc<AppState>>,
+    period: &str,
 ) -> Result<Vec<TimesheetDay>, String> {
-    let (from, to) = range(&period);
+    let (from, to) = range(period);
     let store = state.store.lock().map_err(err)?;
     let mut days = Vec::new();
     let mut cursor = from;
     while cursor < to {
         let next = cursor + Duration::days(1);
-        let rows = store
-            .usage_by(Dimension::Project, cursor, next)
-            .map_err(err)?;
+        let rows = store.usage_by(Dimension::Project, cursor, next).map_err(err)?;
         let total_seconds = rows.iter().map(|r| r.seconds).sum();
         if total_seconds > 0 {
             days.push(TimesheetDay {
@@ -142,6 +145,80 @@ fn timesheet(
     Ok(days)
 }
 
+/// Timesheet del periodo, giorno per giorno, ripartito per progetto.
+#[tauri::command]
+fn timesheet(
+    state: tauri::State<Arc<AppState>>,
+    period: String,
+) -> Result<Vec<TimesheetDay>, String> {
+    timesheet_rows(&state, &period)
+}
+
+/// Esporta il timesheet del periodo in formato CSV (giorno, progetto, ore, secondi).
+#[tauri::command]
+fn export_csv(state: tauri::State<Arc<AppState>>, period: String) -> Result<String, String> {
+    let days = timesheet_rows(&state, &period)?;
+    let mut out = String::new();
+    out.push_str(&csv_line(&[
+        "giorno".into(),
+        "progetto".into(),
+        "ore".into(),
+        "secondi".into(),
+    ]));
+    out.push('\n');
+    for d in days {
+        for r in d.rows {
+            out.push_str(&csv_line(&[
+                d.day.clone(),
+                r.key.clone(),
+                aggregate::human_duration(r.seconds),
+                r.seconds.to_string(),
+            ]));
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+/// Salva un testo (es. l'export CSV) sul percorso scelto dall'utente.
+#[tauri::command]
+fn save_text(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(err)
+}
+
+/// Serie giornaliera (attivo/focus) del periodo, per i grafici storici.
+#[tauri::command]
+fn daily_trend(state: tauri::State<Arc<AppState>>, period: String) -> Result<Vec<DayTotal>, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    let samples = store.samples_between(from, to).map_err(err)?;
+    Ok(trends::daily(&samples))
+}
+
+/// Confronto temporale: periodo corrente vs precedente equivalente.
+#[derive(Serialize)]
+struct PeriodComparison {
+    active: Comparison,
+    focus: Comparison,
+}
+
+#[tauri::command]
+fn compare_periods(
+    state: tauri::State<Arc<AppState>>,
+    period: String,
+) -> Result<PeriodComparison, String> {
+    let (from, to) = range(&period);
+    let span = to - from;
+    let (pfrom, pto) = (from - span, from);
+    let store = state.store.lock().map_err(err)?;
+    let cur = aggregate::metrics(&store.samples_between(from, to).map_err(err)?);
+    let prev = aggregate::metrics(&store.samples_between(pfrom, pto).map_err(err)?);
+    Ok(PeriodComparison {
+        active: Comparison::new(cur.active_seconds, prev.active_seconds),
+        focus: Comparison::new(cur.focus_seconds, prev.focus_seconds),
+    })
+}
+
 /// Restituisce le impostazioni correnti.
 #[tauri::command]
 fn get_settings(state: tauri::State<Arc<AppState>>) -> Result<Settings, String> {
@@ -151,9 +228,11 @@ fn get_settings(state: tauri::State<Arc<AppState>>) -> Result<Settings, String> 
 /// Aggiorna e persiste le impostazioni (regole, repo, retention, intervallo).
 #[tauri::command]
 fn save_settings(
+    app: tauri::AppHandle,
     state: tauri::State<Arc<AppState>>,
     new_settings: Settings,
 ) -> Result<(), String> {
+    apply_autostart(&app, new_settings.autostart);
     new_settings.save().map_err(err)?;
     *state.settings.lock().map_err(err)? = new_settings;
     Ok(())
@@ -182,6 +261,12 @@ fn purge(state: tauri::State<Arc<AppState>>, days: i64) -> Result<usize, String>
     store.purge_before(cutoff).map_err(err)
 }
 
+/// Abilita/disabilita l'avvio automatico al login.
+fn apply_autostart(app: &tauri::AppHandle, enable: bool) {
+    let mgr = app.autolaunch();
+    let _ = if enable { mgr.enable() } else { mgr.disable() };
+}
+
 /// Punto di ingresso dell'app Tauri.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -197,6 +282,7 @@ pub fn run() {
         let _ = store.purge_before(cutoff);
     }
 
+    let want_autostart = settings.autostart;
     let state = Arc::new(AppState::new(store, settings));
     let state_for_tracker = Arc::clone(&state);
 
@@ -206,10 +292,20 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(Arc::clone(&state))
-        .setup(move |_app| {
+        .setup(move |app| {
+            // Allinea l'autostart alle impostazioni salvate.
+            apply_autostart(&app.handle().clone(), want_autostart);
+
+            // Tray icon con menu rapido.
+            build_tray(app)?;
+
             // Avvia il tracciamento in background appena l'app e' pronta.
-            tracker::start(Arc::clone(&state_for_tracker));
+            tracker::start(app.handle().clone(), Arc::clone(&state_for_tracker));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -218,6 +314,10 @@ pub fn run() {
             ai_summary,
             journal,
             timesheet,
+            export_csv,
+            save_text,
+            daily_trend,
+            compare_periods,
             get_settings,
             save_settings,
             set_paused,
@@ -226,4 +326,48 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("errore irreversibile all'avvio di WorkPulse");
+}
+
+/// Costruisce la tray icon con menu: Mostra, Riepilogo, Pausa, Esci.
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Mostra WorkPulse", true, None::<&str>)?;
+    let summary = MenuItem::with_id(app, "summary", "Riepilogo di oggi", true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", "Pausa / Riprendi tracking", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &summary, &pause, &quit])?;
+
+    TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("WorkPulse")
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "summary" => {
+                use tauri_plugin_notification::NotificationExt;
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                let text = tracker::today_summary_text(&state);
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("WorkPulse — riepilogo di oggi")
+                    .body(&text)
+                    .show();
+            }
+            "pause" => {
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                let lock = state.paused.lock();
+                if let Ok(mut p) = lock {
+                    *p = !*p;
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
 }

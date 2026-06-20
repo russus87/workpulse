@@ -16,6 +16,14 @@ pub struct Settings {
     pub git_repos: Vec<String>,
     /// Giorni di conservazione dei dati (retention). 0 = illimitato.
     pub retention_days: i64,
+    /// Secondi di inattivita' oltre i quali un campione e' marcato idle.
+    pub idle_threshold_seconds: u64,
+    /// Avvio automatico di WorkPulse al login.
+    pub autostart: bool,
+    /// Invia una notifica di riepilogo a fine giornata.
+    pub daily_summary: bool,
+    /// Ora locale (0-23) a partire dalla quale inviare il riepilogo giornaliero.
+    pub daily_summary_hour: u32,
     /// Regole di classificazione (categorie app, mappa progetto->cliente).
     pub rules: Rules,
 }
@@ -27,6 +35,10 @@ impl Default for Settings {
             author_email: String::new(),
             git_repos: Vec::new(),
             retention_days: 365,
+            idle_threshold_seconds: 120,
+            autostart: false,
+            daily_summary: true,
+            daily_summary_hour: 18,
             rules: Rules::default(),
         }
     }

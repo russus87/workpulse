@@ -17,8 +17,8 @@ Obiettivo: tracciamento automatico locale + reportistica di base.
 - [x] Work Journal e Timesheet (oggi/settimana/mese).
 - [x] Impostazioni: regole, repo, intervallo, retention.
 - [x] CI multi-piattaforma (AppImage/deb/rpm, .pkg.tar.zst, NSIS/MSI, dmg M1).
-- [ ] Idle detection reale (input inattivo) per OS.
-- [ ] Icone e branding dedicati (ora placeholder).
+- [x] Idle detection reale (input inattivo) per OS (xprintidle / ioreg / GetLastInputInfo).
+- [x] Icone e branding dedicati (logo "pulse", set completo generato con `tauri icon`).
 
 ## V1 (0.2–0.5) — "connettori e precisione"
 
@@ -31,11 +31,11 @@ Obiettivo: dati piu' ricchi e accurati tramite integrazioni dirette.
 - [ ] **Outlook Calendar** e **Teams**: meeting reali (durata, partecipanti,
       titolo) via Microsoft Graph → distinzione meeting vs focus.
 - [ ] **Slack**: presenza/canali via API per quantificare la comunicazione.
-- [ ] Idle/AFK detection nativa e unione automatica di sample contigui.
-- [ ] Trend di produttivita' (serie storiche, confronti settimana/mese) e
-      grafici avanzati nella dashboard.
-- [ ] Export timesheet (CSV/PDF) e regole di arrotondamento configurabili.
-- [ ] Tray icon, avvio automatico, notifiche di riepilogo giornaliero.
+- [x] Idle/AFK detection nativa (vedi MVP). [ ] Unione automatica di sample contigui.
+- [x] Trend di produttivita' (serie giornaliera, confronto col periodo precedente).
+      [ ] Grafici avanzati e confronti settimana/mese estesi.
+- [x] Export timesheet **CSV**. [ ] Export PDF e regole di arrotondamento.
+- [x] Tray icon, avvio automatico, notifica di riepilogo giornaliero.
 
 ## V2 (0.6+) — "intelligenza e scala"
 

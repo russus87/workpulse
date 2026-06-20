@@ -1,4 +1,5 @@
 <script>
+  import { save } from "@tauri-apps/plugin-dialog";
   import { api, humanDuration } from "./lib/api.js";
   import Bars from "./components/Bars.svelte";
 
@@ -15,6 +16,8 @@
   let byTicket = $state([]);
   let journalEntries = $state([]);
   let sheet = $state([]);
+  let trend = $state([]);
+  let comparison = $state(null);
   let settings = $state(null);
   let paused = $state(false);
   let error = $state("");
@@ -29,7 +32,7 @@
   async function refresh() {
     error = "";
     try {
-      [summary, metrics, byProject, byApp, byClient, byTicket, journalEntries, sheet] =
+      [summary, metrics, byProject, byApp, byClient, byTicket, journalEntries, sheet, trend, comparison] =
         await Promise.all([
           api.aiSummary(period),
           api.productivity(period),
@@ -39,6 +42,8 @@
           api.usageBy("ticket", period),
           api.journal(period),
           api.timesheet(period),
+          api.dailyTrend(period),
+          api.comparePeriods(period),
         ]);
     } catch (e) {
       error = String(e);
@@ -68,6 +73,26 @@
     refresh();
   }
 
+  // Esporta il timesheet del periodo in un file CSV scelto dall'utente.
+  async function exportCsv() {
+    try {
+      const csv = await api.exportCsv(period);
+      const path = await save({
+        defaultPath: `workpulse-${period}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (path) await api.saveText(path, csv);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  // Formatta il delta percentuale di un confronto come "+12%" / "-5%" / "—".
+  function deltaLabel(c) {
+    if (!c || c.delta_pct === null || c.delta_pct === undefined) return "—";
+    return (c.delta_pct >= 0 ? "+" : "") + c.delta_pct + "%";
+  }
+
   // Carica i dati all'avvio.
   $effect(() => {
     refresh();
@@ -93,6 +118,7 @@
     <div class="brand">Work<span>Pulse</span></div>
     <button class="nav-item" class:active={view === "dashboard"} onclick={() => (view = "dashboard")}>📊 Dashboard</button>
     <button class="nav-item" class:active={view === "journal"} onclick={() => (view = "journal")}>📓 Work Journal</button>
+    <button class="nav-item" class:active={view === "analytics"} onclick={() => (view = "analytics")}>📈 Analisi storica</button>
     <button class="nav-item" class:active={view === "timesheet"} onclick={() => (view = "timesheet")}>🗓️ Timesheet</button>
     <button class="nav-item" class:active={view === "settings"} onclick={() => (view = "settings")}>⚙️ Impostazioni</button>
     <div class="spacer"></div>
@@ -167,9 +193,35 @@
       </div>
     {/if}
 
+    {#if view === "analytics"}
+      {#if comparison}
+        <div class="kpis" style="grid-template-columns:repeat(2,1fr)">
+          <div class="kpi">
+            <div class="v">{humanDuration(comparison.active.current)} <span class="muted" style="font-size:14px">({deltaLabel(comparison.active)})</span></div>
+            <div class="k">Tempo attivo vs periodo precedente ({humanDuration(comparison.active.previous)})</div>
+          </div>
+          <div class="kpi">
+            <div class="v">{humanDuration(comparison.focus.current)} <span class="muted" style="font-size:14px">({deltaLabel(comparison.focus)})</span></div>
+            <div class="k">Focus vs periodo precedente ({humanDuration(comparison.focus.previous)})</div>
+          </div>
+        </div>
+      {/if}
+      <div class="card">
+        <h3>Trend giornaliero — attivo</h3>
+        <Bars rows={trend.map((d) => ({ key: d.day, seconds: d.active_seconds }))} />
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Trend giornaliero — focus</h3>
+        <Bars rows={trend.map((d) => ({ key: d.day, seconds: d.focus_seconds }))} green />
+      </div>
+    {/if}
+
     {#if view === "timesheet"}
       <div class="card">
-        <h3>Timesheet automatico</h3>
+        <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">Timesheet automatico</h3>
+          <button class="btn ghost" onclick={exportCsv}>⬇️ Esporta CSV</button>
+        </div>
         {#if sheet.length === 0}
           <p class="muted">Nessun dato nel periodo.</p>
         {:else}
@@ -211,6 +263,24 @@
               <input type="number" min="0" bind:value={settings.retention_days} />
             </label>
           </div>
+          <div class="row">
+            <label class="field" style="flex:1">
+              <span>Soglia inattivita' (secondi)</span>
+              <input type="number" min="30" bind:value={settings.idle_threshold_seconds} />
+            </label>
+            <label class="field" style="flex:1">
+              <span>Ora riepilogo giornaliero (0-23)</span>
+              <input type="number" min="0" max="23" bind:value={settings.daily_summary_hour} />
+            </label>
+          </div>
+          <label class="field row" style="gap:8px; align-items:center">
+            <input type="checkbox" style="width:auto" bind:checked={settings.autostart} />
+            <span style="margin:0">Avvia WorkPulse automaticamente al login</span>
+          </label>
+          <label class="field row" style="gap:8px; align-items:center">
+            <input type="checkbox" style="width:auto" bind:checked={settings.daily_summary} />
+            <span style="margin:0">Notifica di riepilogo a fine giornata</span>
+          </label>
           <div class="row">
             <button class="btn" onclick={saveSettings}>💾 Salva</button>
             <button class="btn ghost" onclick={() => api.purge(settings.retention_days).then(refresh)}>

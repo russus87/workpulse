@@ -14,6 +14,10 @@ sui confini del giorno **locale** dell'utente.
 | `ai_summary` | `{ period }` | `string` | Riepilogo in linguaggio naturale. |
 | `journal` | `{ period }` | `JournalEntry[]` | Work Journal per progetto. |
 | `timesheet` | `{ period }` | `TimesheetDay[]` | Timesheet giorno-per-giorno per progetto. |
+| `export_csv` | `{ period }` | `string` | Timesheet del periodo in CSV (RFC 4180). |
+| `save_text` | `{ path, content }` | — | Salva testo (es. CSV) su un percorso scelto. |
+| `daily_trend` | `{ period }` | `DayTotal[]` | Serie giornaliera attivo/focus per i grafici storici. |
+| `compare_periods` | `{ period }` | `PeriodComparison` | Confronto col periodo precedente equivalente (delta %). |
 | `get_settings` | — | `Settings` | Impostazioni correnti. |
 | `save_settings` | `{ newSettings }` | — | Persiste e applica nuove impostazioni. |
 | `set_paused` | `{ paused }` | `bool` | Pausa/ripresa del tracciamento. |

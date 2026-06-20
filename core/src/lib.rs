@@ -15,7 +15,9 @@ pub mod error;
 pub mod git;
 pub mod journal;
 pub mod model;
+pub mod report;
 pub mod storage;
 pub mod summary;
+pub mod trends;
 
 pub use error::{Error, Result};

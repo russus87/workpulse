@@ -22,6 +22,28 @@ pub struct RawWindow {
     pub title: String,
 }
 
+/// Secondi di inattivita' dell'utente (nessun input mouse/tastiera), se il
+/// sistema sa fornirli. `None` se lo strumento non e' disponibile: in quel caso
+/// il tracker considera l'utente attivo (degradazione prudente).
+pub fn idle_seconds() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::idle_seconds()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::idle_seconds()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::idle_seconds()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
 /// Cattura la finestra attiva, se possibile sul sistema corrente.
 pub fn active_window() -> Option<RawWindow> {
     #[cfg(target_os = "linux")]
@@ -84,6 +106,12 @@ mod linux {
         }
         Some(RawWindow { app, title })
     }
+
+    /// `xprintidle` riporta i millisecondi di inattivita' su X11.
+    pub fn idle_seconds() -> Option<u64> {
+        let ms = run("xprintidle", &[])?.parse::<u64>().ok()?;
+        Some(ms / 1000)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -113,6 +141,22 @@ mod macos {
         let app = lines.next()?.trim().to_string();
         let title = lines.next().unwrap_or("").trim().to_string();
         Some(RawWindow { app, title })
+    }
+
+    /// `HIDIdleTime` di IOHIDSystem e' in nanosecondi dall'ultimo input.
+    pub fn idle_seconds() -> Option<u64> {
+        let out = Command::new("sh")
+            .args([
+                "-c",
+                "ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print $NF; exit}'",
+            ])
+            .output()
+            .ok()?;
+        let ns = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .ok()?;
+        Some(ns / 1_000_000_000)
     }
 }
 
@@ -159,5 +203,30 @@ Write-Output $sb.ToString()
             return None;
         }
         Some(RawWindow { app, title })
+    }
+
+    /// GetLastInputInfo: ticks dall'ultimo input vs uptime → secondi di idle.
+    pub fn idle_seconds() -> Option<u64> {
+        let ps = r#"
+$sig = @'
+using System;
+using System.Runtime.InteropServices;
+public class I {
+  [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+  [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO p);
+  [DllImport("kernel32.dll")] public static extern uint GetTickCount();
+}
+'@
+Add-Type $sig
+$l = New-Object I+LASTINPUTINFO
+$l.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($l)
+[void][I]::GetLastInputInfo([ref]$l)
+Write-Output ([math]::Floor(([I]::GetTickCount() - $l.dwTime) / 1000))
+"#;
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok()
     }
 }
