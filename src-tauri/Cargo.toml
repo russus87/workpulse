@@ -22,7 +22,7 @@ log = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 # Cartella dati per-utente (dove vive il DB SQLite locale).
 dirs = "5"
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

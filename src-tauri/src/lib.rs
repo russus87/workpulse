@@ -11,7 +11,6 @@ use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Utc};
 use serde::Serialize;
 use settings::Settings;
 use std::sync::Arc;
-use tauri::Manager;
 use tracker::AppState;
 use workpulse_core::aggregate;
 use workpulse_core::model::{JournalEntry, ProductivityMetrics, UsageRow};
