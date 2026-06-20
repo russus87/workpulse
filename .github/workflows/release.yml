@@ -73,7 +73,12 @@ jobs:
             libsoup-3.0-dev \
             libappindicator3-dev \
             librsvg2-dev \
+            libdbus-1-dev \
             patchelf
+
+      - name: NASM (solo Windows, per OpenSSL vendored di SQLCipher)
+        if: matrix.platform == 'windows-latest'
+        uses: ilammy/setup-nasm@v1
 
       - name: Installa dipendenze frontend
         run: npm install
@@ -94,7 +99,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Strumenti base nel container
-        run: pacman -Syu --noconfirm git nodejs npm rust base-devel webkit2gtk-4.1 gtk3 librsvg sudo
+        run: pacman -Syu --noconfirm git nodejs npm rust base-devel webkit2gtk-4.1 gtk3 librsvg sudo dbus perl nasm
 
       - uses: actions/checkout@v4
 

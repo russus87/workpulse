@@ -16,18 +16,23 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 use workpulse_core::classify::Classifier;
 use workpulse_core::git;
+use workpulse_core::model::Category;
 use workpulse_core::storage::Store;
 use workpulse_core::summary::{self, SummaryInput};
 
 /// Stato condiviso tra la UI (comandi Tauri) e il thread di tracking.
 pub struct AppState {
     pub store: Mutex<Store>,
-    pub classifier: Classifier,
+    pub classifier: Mutex<Classifier>,
     pub settings: Mutex<Settings>,
     /// Flag per mettere in pausa la registrazione (privacy: "pausa tracciamento").
     pub paused: Mutex<bool>,
     /// Ultimo giorno (YYYY-MM-DD) per cui e' stato inviato il riepilogo.
     pub last_summary_day: Mutex<Option<String>>,
+    /// Fine di una sessione di focus in corso (Pomodoro), se attiva.
+    pub focus_until: Mutex<Option<chrono::DateTime<Utc>>>,
+    /// Ultimo giorno in cui e' stato inviato il nudge "troppa comunicazione".
+    pub last_comm_nudge_day: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -35,12 +40,33 @@ impl AppState {
         let classifier = Classifier::new(settings.rules.clone());
         AppState {
             store: Mutex::new(store),
-            classifier,
+            classifier: Mutex::new(classifier),
             settings: Mutex::new(settings),
             paused: Mutex::new(false),
             last_summary_day: Mutex::new(None),
+            focus_until: Mutex::new(None),
+            last_comm_nudge_day: Mutex::new(None),
         }
     }
+
+    /// Aggiorna il classificatore quando cambiano le regole.
+    pub fn reload_classifier(&self) {
+        let rules = self.settings.lock().unwrap().rules.clone();
+        *self.classifier.lock().unwrap() = Classifier::new(rules);
+    }
+}
+
+/// Rileva se il titolo finestra indica una sessione di navigazione privata.
+fn is_private_window(title: &str) -> bool {
+    let t = title.to_lowercase();
+    ["incognito", "inprivate", "private browsing", "navigazione in incognito", "(private"]
+        .iter()
+        .any(|m| t.contains(m))
+}
+
+/// Invia una notifica best-effort.
+fn notify(app: &AppHandle, title: &str, body: &str) {
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// Avvia il loop di campionamento su un thread in background.
@@ -51,6 +77,8 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
             s.sample_seconds.max(5)
         };
         let mut ticks: u64 = 0;
+        let mut active_streak: i64 = 0; // secondi attivi consecutivi senza pausa
+        let mut focus_done_notified = true;
         loop {
             thread::sleep(Duration::from_secs(interval as u64));
             ticks += 1;
@@ -59,9 +87,16 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
                 continue;
             }
 
-            let (git_repo0, idle_threshold) = {
+            let (git_repo0, idle_threshold, personal, private_autopause, no_break, comm_limit) = {
                 let s = state.settings.lock().unwrap();
-                (s.git_repos.first().cloned(), s.idle_threshold_seconds)
+                (
+                    s.git_repos.first().cloned(),
+                    s.idle_threshold_seconds,
+                    s.personal_apps.clone(),
+                    s.private_autopause,
+                    s.nudge_no_break_minutes,
+                    s.nudge_comm_minutes,
+                )
             };
 
             // Idle reale: l'utente e' inattivo oltre la soglia?
@@ -72,11 +107,37 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
             let git_branch = git_repo0.as_deref().and_then(git::current_branch);
 
             if let Some(snap) = capture::snapshot(idle, git_branch) {
-                let sample = state.classifier.classify(&snap, interval);
-                if let Ok(store) = state.store.lock() {
-                    let _ = store.insert_sample(&sample);
+                // Auto-pausa privacy: app personali o finestre in incognito.
+                let app_lower = snap.app.to_lowercase();
+                let personal_hit = personal.iter().any(|p| app_lower.contains(&p.to_lowercase()));
+                let private_hit = private_autopause && is_private_window(&snap.title);
+                if !(personal_hit || private_hit) {
+                    let sample = state.classifier.lock().unwrap().classify(&snap, interval);
+                    if let Ok(store) = state.store.lock() {
+                        let _ = store.insert_sample(&sample);
+                    }
+                }
+
+                // Streak di attivita' per il nudge "fai una pausa".
+                if idle {
+                    active_streak = 0;
+                } else {
+                    active_streak += interval;
+                    if no_break > 0 && active_streak >= no_break * 60 {
+                        notify(&app, "WorkPulse — pausa?", &format!(
+                            "Stai lavorando da {} senza pause.",
+                            workpulse_core::aggregate::human_duration(active_streak)
+                        ));
+                        active_streak = 0;
+                    }
                 }
             }
+
+            // Nudge "troppa comunicazione" (una volta al giorno).
+            maybe_comm_nudge(&app, &state, comm_limit);
+
+            // Fine sessione di focus.
+            focus_done_notified = check_focus_end(&app, &state, focus_done_notified);
 
             // Ogni ~5 minuti importa i commit recenti dai repo configurati.
             if ticks % (300 / interval.max(1) as u64).max(1) == 0 {
@@ -125,6 +186,74 @@ pub fn today_summary_text(state: &Arc<AppState>) -> String {
         commits: &commits,
         meetings: &meetings,
     })
+}
+
+/// Inizio della giornata locale, in UTC.
+fn start_of_today_utc() -> chrono::DateTime<Utc> {
+    let now = Local::now();
+    Local
+        .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+/// Nudge "troppa comunicazione oggi", al massimo una volta al giorno.
+fn maybe_comm_nudge(app: &AppHandle, state: &Arc<AppState>, comm_limit_minutes: i64) {
+    if comm_limit_minutes <= 0 {
+        return;
+    }
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    if state.last_comm_nudge_day.lock().unwrap().as_deref() == Some(today.as_str()) {
+        return;
+    }
+    let comm_seconds = {
+        let store = match state.store.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let samples = store
+            .samples_between(start_of_today_utc(), Utc::now())
+            .unwrap_or_default();
+        samples
+            .iter()
+            .filter(|s| !s.idle && matches!(s.category, Category::Communication))
+            .map(|s| s.seconds)
+            .sum::<i64>()
+    };
+    if comm_seconds >= comm_limit_minutes * 60 {
+        notify(
+            app,
+            "WorkPulse — comunicazione",
+            &format!(
+                "Oggi {} in comunicazione/meeting. Recupera un blocco di focus?",
+                workpulse_core::aggregate::human_duration(comm_seconds)
+            ),
+        );
+        *state.last_comm_nudge_day.lock().unwrap() = Some(today);
+    }
+}
+
+/// Notifica la fine di una sessione di focus. Ritorna il nuovo flag "notificato".
+fn check_focus_end(app: &AppHandle, state: &Arc<AppState>, notified: bool) -> bool {
+    let mut guard = state.focus_until.lock().unwrap();
+    match *guard {
+        Some(end) => {
+            if Utc::now() >= end {
+                if !notified {
+                    notify(
+                        app,
+                        "WorkPulse — focus completato",
+                        "Sessione di focus terminata. Prenditi una pausa.",
+                    );
+                }
+                *guard = None;
+                true
+            } else {
+                false
+            }
+        }
+        None => true,
+    }
 }
 
 /// Invia la notifica di riepilogo una volta al giorno, dopo l'ora configurata.

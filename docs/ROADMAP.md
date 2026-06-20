@@ -32,18 +32,26 @@ Obiettivo: dati piu' ricchi e accurati tramite integrazioni dirette.
       online sì/no) via Microsoft Graph (device code flow, `Calendars.Read`).
       Vedi [INTEGRATIONS.md](INTEGRATIONS.md). [ ] Teams presence/canali.
 - [ ] **Slack**: presenza/canali via API per quantificare la comunicazione.
-- [x] Idle/AFK detection nativa (vedi MVP). [ ] Unione automatica di sample contigui.
-- [x] Trend di produttivita' (serie giornaliera, confronto col periodo precedente).
-      [ ] Grafici avanzati e confronti settimana/mese estesi.
-- [x] Export timesheet **CSV**. [ ] Export PDF e regole di arrotondamento.
+- [x] Idle/AFK detection nativa (vedi MVP) + **riconciliazione** dei blocchi idle.
+- [x] Trend di produttivita' (serie giornaliera, confronto col periodo precedente)
+      + **heatmap** giorno×ora. [ ] Confronti settimana/mese estesi.
+- [x] Export timesheet **CSV** + **layer di fatturazione** (tariffe per cliente,
+      arrotondamento, importi). [ ] Export PDF.
 - [x] Tray icon, avvio automatico, notifica di riepilogo giornaliero.
+- [x] **Focus mode / Pomodoro** + nudge anti-distrazione (pausa, troppa comunicazione).
+- [x] **Standup generator** (recap copiabile) + **metriche dev** (linguaggi, righe +/-).
+- [x] **Correzione manuale** (riassegna progetto/cliente, riassegna app in blocco, elimina).
+- [x] **Apprendimento regole** (suggerisce mappature per app/branch non assegnati).
+- [x] **Auto-pausa privacy** (app personali, finestre in incognito).
+- [x] **Onboarding wizard** al primo avvio.
 
 ## V2 (0.6+) — "intelligenza e scala"
 
 Obiettivo: insight piu' profondi e uso multi-dispositivo/team, sempre privacy-first.
 
-- [ ] **AI Summary LLM** opzionale (locale o remoto), con riepiloghi settimanali
-      e suggerimenti ("le tue ore di focus calano dopo le 15").
+- [x] **AI Summary LLM locale** opzionale (Ollama): insight del periodo,
+      privacy-safe. [ ] Riepiloghi schedulati e rilevamento anomalie.
+- [x] **Cifratura DB a riposo** (SQLCipher, passphrase nel portachiavi OS).
 - [ ] **Sync end-to-end cifrato** multi-dispositivo (server self-hostable).
 - [ ] **Team analytics** aggregati e anonimizzati (ore per progetto/cliente),
       senza esporre attivita' individuali.

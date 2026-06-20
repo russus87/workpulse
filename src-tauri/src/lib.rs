@@ -5,6 +5,7 @@
 
 mod capture;
 mod graph;
+mod llm;
 mod settings;
 mod tracker;
 
@@ -18,11 +19,36 @@ use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use tracker::AppState;
 use workpulse_core::aggregate;
-use workpulse_core::model::{JournalEntry, Meeting, ProductivityMetrics, UsageRow};
+use workpulse_core::billing::{self, BillItem};
+use workpulse_core::devstats::{self, CodeTotals};
+use workpulse_core::heatmap::{self, HeatCell};
+use workpulse_core::model::{ActivitySample, JournalEntry, Meeting, ProductivityMetrics, UsageRow};
 use workpulse_core::report::csv_line;
+use workpulse_core::standup;
 use workpulse_core::storage::Dimension;
+use workpulse_core::suggest::{self, Suggestion};
 use workpulse_core::summary::{self, SummaryInput};
 use workpulse_core::trends::{self, Comparison, DayTotal};
+
+/// Servizio usato nel portachiavi di sistema per la passphrase del DB.
+const KEYRING_SERVICE: &str = "WorkPulse";
+const KEYRING_USER: &str = "db-passphrase";
+
+/// Legge la passphrase del DB dal portachiavi, se presente.
+fn keyring_get() -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Salva la passphrase del DB nel portachiavi.
+fn keyring_set(pass: &str) -> Result<(), String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .map_err(err)?
+        .set_password(pass)
+        .map_err(err)
+}
 
 /// Converte un errore in stringa per la UI.
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -246,6 +272,7 @@ fn save_settings(
     apply_autostart(&app, new_settings.autostart);
     new_settings.save().map_err(err)?;
     *state.settings.lock().map_err(err)? = new_settings;
+    state.reload_classifier(); // applica subito eventuali nuove regole
     Ok(())
 }
 
@@ -349,6 +376,240 @@ fn graph_disconnect(state: tauri::State<Arc<AppState>>) -> Result<(), String> {
     s.save().map_err(err)
 }
 
+// ---- Fatturazione ----
+
+#[derive(Serialize)]
+struct BillingResult {
+    items: Vec<BillItem>,
+    total: f64,
+    currency_hint: String,
+}
+
+/// Calcola la fatturazione per cliente nel periodo (tariffe + arrotondamento dalle impostazioni).
+#[tauri::command]
+fn billing(state: tauri::State<Arc<AppState>>, period: String) -> Result<BillingResult, String> {
+    let (from, to) = range(&period);
+    let (rates, round) = {
+        let s = state.settings.lock().map_err(err)?;
+        (s.rates.clone(), s.billing_round_minutes)
+    };
+    let store = state.store.lock().map_err(err)?;
+    let rows = store.usage_by(Dimension::Client, from, to).map_err(err)?;
+    let items = billing::bill(&rows, &rates, round);
+    let total = billing::total(&items);
+    Ok(BillingResult { items, total, currency_hint: "€".into() })
+}
+
+// ---- Standup / metriche dev ----
+
+/// Genera il testo dello standup (Markdown) per il periodo.
+#[tauri::command]
+fn standup_text(state: tauri::State<Arc<AppState>>, period: String) -> Result<String, String> {
+    let (from, to) = range(&period);
+    let label = match period.as_str() {
+        "week" => "Questa settimana",
+        "month" => "Questo mese",
+        _ => "Oggi",
+    };
+    let store = state.store.lock().map_err(err)?;
+    let samples = store.samples_between(from, to).map_err(err)?;
+    let commits = store.commits_between(from, to).map_err(err)?;
+    let meetings = store.meetings_between(from, to).map_err(err)?;
+    Ok(standup::standup(label, &samples, &commits, &meetings))
+}
+
+/// Tempo per linguaggio (dedotto dai titoli dell'editor) nel periodo.
+#[tauri::command]
+fn languages(state: tauri::State<Arc<AppState>>, period: String) -> Result<Vec<UsageRow>, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    let samples = store.samples_between(from, to).map_err(err)?;
+    Ok(devstats::by_language(&samples))
+}
+
+/// Totali di codice (commit, righe +/-) nel periodo.
+#[tauri::command]
+fn code_totals(state: tauri::State<Arc<AppState>>, period: String) -> Result<CodeTotals, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    let commits = store.commits_between(from, to).map_err(err)?;
+    Ok(devstats::code_totals(&commits))
+}
+
+/// Heatmap (giorno x ora) del periodo.
+#[tauri::command]
+fn heat(state: tauri::State<Arc<AppState>>, period: String) -> Result<Vec<HeatCell>, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    let samples = store.samples_between(from, to).map_err(err)?;
+    Ok(heatmap::heatmap(&samples))
+}
+
+/// Suggerimenti di regole (app/branch senza progetto) nel periodo.
+#[tauri::command]
+fn suggestions(state: tauri::State<Arc<AppState>>, period: String) -> Result<Vec<Suggestion>, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    let samples = store.samples_between(from, to).map_err(err)?;
+    Ok(suggest::suggest(&samples, 600))
+}
+
+// ---- Correzione manuale ----
+
+/// Aggiorna i campi di un sample (progetto/ticket/cliente/idle). Stringa vuota = azzera.
+#[tauri::command]
+fn update_sample(
+    state: tauri::State<Arc<AppState>>,
+    id: i64,
+    project: Option<String>,
+    ticket: Option<String>,
+    client: Option<String>,
+    idle: Option<bool>,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(err)?;
+    store
+        .update_sample(id, project.as_deref(), ticket.as_deref(), client.as_deref(), idle)
+        .map_err(err)
+}
+
+/// Riassegna in blocco tutti i sample di un'app a un progetto/cliente.
+#[tauri::command]
+fn reassign_app(
+    state: tauri::State<Arc<AppState>>,
+    app: String,
+    project: String,
+    client: Option<String>,
+) -> Result<usize, String> {
+    let store = state.store.lock().map_err(err)?;
+    store.reassign_app(&app, &project, client.as_deref()).map_err(err)
+}
+
+/// Elimina un sample.
+#[tauri::command]
+fn delete_sample(state: tauri::State<Arc<AppState>>, id: i64) -> Result<(), String> {
+    let store = state.store.lock().map_err(err)?;
+    store.delete_sample(id).map_err(err)
+}
+
+/// Blocchi idle da riconciliare nel periodo (default >= 5 minuti).
+#[tauri::command]
+fn idle_blocks(
+    state: tauri::State<Arc<AppState>>,
+    period: String,
+) -> Result<Vec<ActivitySample>, String> {
+    let (from, to) = range(&period);
+    let store = state.store.lock().map_err(err)?;
+    store.idle_blocks(from, to, 300).map_err(err)
+}
+
+// ---- Focus / Pomodoro ----
+
+/// Avvia una sessione di focus di `minutes` minuti (0 = usa la durata Pomodoro).
+#[tauri::command]
+fn focus_start(state: tauri::State<Arc<AppState>>, minutes: i64) -> Result<i64, String> {
+    let m = if minutes > 0 {
+        minutes
+    } else {
+        state.settings.lock().map_err(err)?.pomodoro_minutes
+    };
+    let until = Utc::now() + Duration::minutes(m);
+    *state.focus_until.lock().map_err(err)? = Some(until);
+    Ok(m)
+}
+
+/// Interrompe la sessione di focus.
+#[tauri::command]
+fn focus_stop(state: tauri::State<Arc<AppState>>) -> Result<(), String> {
+    *state.focus_until.lock().map_err(err)? = None;
+    Ok(())
+}
+
+/// Secondi rimanenti della sessione di focus (0 se non attiva).
+#[tauri::command]
+fn focus_status(state: tauri::State<Arc<AppState>>) -> Result<i64, String> {
+    let until = *state.focus_until.lock().map_err(err)?;
+    Ok(match until {
+        Some(end) => (end - Utc::now()).num_seconds().max(0),
+        None => 0,
+    })
+}
+
+// ---- Insight LLM locale ----
+
+/// Genera un insight settimanale con l'LLM locale (fallback: riepilogo a template).
+#[tauri::command]
+fn llm_insights(state: tauri::State<Arc<AppState>>, period: String) -> Result<String, String> {
+    let (from, to) = range(&period);
+    let (enabled, endpoint, model) = {
+        let s = state.settings.lock().map_err(err)?;
+        (s.llm_enabled, s.llm_endpoint.clone(), s.llm_model.clone())
+    };
+
+    // Base dati testuale (gia' aggregata, nessun titolo grezzo).
+    let data = {
+        let store = state.store.lock().map_err(err)?;
+        let samples = store.samples_between(from, to).map_err(err)?;
+        let commits = store.commits_between(from, to).map_err(err)?;
+        let meetings = store.meetings_between(from, to).map_err(err)?;
+        let by_project = store.usage_by(Dimension::Project, from, to).map_err(err)?;
+        let m = aggregate::metrics(&samples);
+        let mut s = String::new();
+        s.push_str(&format!(
+            "Tempo attivo: {}, focus: {}, context switch: {}, interruzioni: {}.\n",
+            aggregate::human_duration(m.active_seconds),
+            aggregate::human_duration(m.focus_seconds),
+            m.context_switches,
+            m.interruptions
+        ));
+        for r in by_project.iter().take(8) {
+            s.push_str(&format!("- {}: {}\n", r.key, aggregate::human_duration(r.seconds)));
+        }
+        s.push_str(&format!("Commit: {}, meeting: {}.\n", commits.len(), meetings.len()));
+        s
+    };
+
+    if !enabled {
+        return Err("Insight LLM non abilitati. Attivali nelle impostazioni.".into());
+    }
+    let prompt = llm::weekly_prompt(&data);
+    llm::generate(&endpoint, &model, &prompt)
+}
+
+// ---- Cifratura DB a riposo ----
+
+/// Attiva la cifratura del DB: migra i dati in un file cifrato e salva la
+/// passphrase nel portachiavi. Richiede il riavvio per completare.
+#[tauri::command]
+fn enable_db_encryption(
+    state: tauri::State<Arc<AppState>>,
+    passphrase: String,
+) -> Result<String, String> {
+    if passphrase.len() < 8 {
+        return Err("La passphrase deve avere almeno 8 caratteri.".into());
+    }
+    {
+        let s = state.settings.lock().map_err(err)?;
+        if s.db_encrypted {
+            return Err("Il database e' gia' cifrato.".into());
+        }
+    }
+    let plain = settings::db_path();
+    let enc = plain.with_extension("db.enc");
+    workpulse_core::storage::Store::export_encrypted(
+        plain.to_string_lossy().as_ref(),
+        enc.to_string_lossy().as_ref(),
+        &passphrase,
+    )
+    .map_err(err)?;
+    keyring_set(&passphrase)?;
+    {
+        let mut s = state.settings.lock().map_err(err)?;
+        s.db_encrypted = true;
+        s.save().map_err(err)?;
+    }
+    Ok("Cifratura attivata. Riavvia WorkPulse per completare.".into())
+}
+
 /// Abilita/disabilita l'avvio automatico al login.
 fn apply_autostart(app: &tauri::AppHandle, enable: bool) {
     let mgr = app.autolaunch();
@@ -359,10 +620,27 @@ fn apply_autostart(app: &tauri::AppHandle, enable: bool) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let settings = Settings::load();
-    let store = workpulse_core::storage::Store::open(
-        settings::db_path().to_string_lossy().as_ref(),
+    let db = settings::db_path();
+
+    // Cifratura a riposo: se attiva, completa l'eventuale migrazione pendente
+    // (file .db.enc creato dal comando di attivazione) e apri con la passphrase.
+    let key: Option<String> = if settings.db_encrypted {
+        let enc = db.with_extension("db.enc");
+        if enc.exists() {
+            // Sostituisce il DB in chiaro con quello cifrato.
+            let _ = std::fs::remove_file(&db);
+            let _ = std::fs::rename(&enc, &db);
+        }
+        keyring_get()
+    } else {
+        None
+    };
+
+    let store = workpulse_core::storage::Store::open_with_key(
+        db.to_string_lossy().as_ref(),
+        key.as_deref(),
     )
-    .expect("impossibile aprire il database di WorkPulse");
+    .expect("impossibile aprire il database di WorkPulse (passphrase errata?)");
 
     // Retention automatica all'avvio.
     if settings.retention_days > 0 {
@@ -411,6 +689,21 @@ pub fn run() {
             graph_poll_auth,
             graph_sync,
             graph_disconnect,
+            billing,
+            standup_text,
+            languages,
+            code_totals,
+            heat,
+            suggestions,
+            update_sample,
+            reassign_app,
+            delete_sample,
+            idle_blocks,
+            focus_start,
+            focus_stop,
+            focus_status,
+            llm_insights,
+            enable_db_encryption,
             get_settings,
             save_settings,
             set_paused,

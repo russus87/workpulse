@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use workpulse_core::billing::Rates;
 use workpulse_core::classify::Rules;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,32 @@ pub struct Settings {
     pub graph_tenant: String,
     /// Refresh token salvato dopo l'autorizzazione (vuoto = non connesso).
     pub graph_refresh_token: String,
+    /// Tariffe orarie per la fatturazione (default + override per cliente/progetto).
+    pub rates: Rates,
+    /// Arrotondamento della fatturazione in minuti (0 = nessuno).
+    pub billing_round_minutes: i64,
+    /// Durata di una sessione di focus (Pomodoro), in minuti.
+    pub pomodoro_minutes: i64,
+    /// Durata della pausa dopo una sessione di focus, in minuti.
+    pub break_minutes: i64,
+    /// Nudge: avvisa se non fai pause da N minuti (0 = disattivo).
+    pub nudge_no_break_minutes: i64,
+    /// Nudge: avvisa se superi N minuti di comunicazione nel giorno (0 = disattivo).
+    pub nudge_comm_minutes: i64,
+    /// App considerate "personali": il tracking si mette in pausa quando sono attive.
+    pub personal_apps: Vec<String>,
+    /// Auto-pausa quando rileva finestre in incognito/privato.
+    pub private_autopause: bool,
+    /// Insight con LLM locale (es. Ollama) attivi.
+    pub llm_enabled: bool,
+    /// Endpoint dell'LLM locale (Ollama: http://localhost:11434).
+    pub llm_endpoint: String,
+    /// Modello LLM da usare (es. "llama3.2").
+    pub llm_model: String,
+    /// L'utente ha completato l'onboarding iniziale.
+    pub onboarded: bool,
+    /// Cifratura del database a riposo (SQLCipher). Passphrase nel keyring di sistema.
+    pub db_encrypted: bool,
     /// Regole di classificazione (categorie app, mappa progetto->cliente).
     pub rules: Rules,
 }
@@ -51,6 +78,19 @@ impl Default for Settings {
             graph_client_id: String::new(),
             graph_tenant: "organizations".into(),
             graph_refresh_token: String::new(),
+            rates: Rates::default(),
+            billing_round_minutes: 15,
+            pomodoro_minutes: 25,
+            break_minutes: 5,
+            nudge_no_break_minutes: 90,
+            nudge_comm_minutes: 120,
+            personal_apps: Vec::new(),
+            private_autopause: true,
+            llm_enabled: false,
+            llm_endpoint: "http://localhost:11434".into(),
+            llm_model: "llama3.2".into(),
+            onboarded: false,
+            db_encrypted: false,
             rules: Rules::default(),
         }
     }

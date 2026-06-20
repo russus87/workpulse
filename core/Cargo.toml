@@ -7,7 +7,7 @@
 # degli "snapshot" gia' pronti, cosi' resta puro e testabile su ogni piattaforma.
 [package]
 name = "workpulse-core"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
@@ -17,9 +17,10 @@ serde_json = "1"
 thiserror = "2"
 # Date/orari con fuso: usato ovunque per i sample e l'aggregazione giornaliera.
 chrono = { version = "0.4", features = ["serde"] }
-# SQLite incorporato (compila il C di sqlite): zero dipendenze di sistema,
-# ottimo per pacchettizzare su tutte le piattaforme.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# SQLCipher incorporato (SQLite + cifratura AES-256), con OpenSSL "vendored":
+# il C viene compilato dal sorgente, niente dipendenze di sistema a runtime.
+# Abilita la cifratura del DB a riposo (PRAGMA key); senza key resta SQLite normale.
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
 # Regole di classificazione (riconoscere ticket tipo PAM-123, host del browser, ecc.).
 regex = "1"
 

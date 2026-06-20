@@ -20,6 +20,15 @@
   let trend = $state([]);
   let comparison = $state(null);
   let meetingList = $state([]);
+  let bill = $state(null);
+  let langs = $state([]);
+  let codeStats = $state(null);
+  let heatCells = $state([]);
+  let suggList = $state([]);
+  let idleList = $state([]);
+  let standupTxt = $state("");
+  let insightsTxt = $state("");
+  let focusSecs = $state(0);
   let settings = $state(null);
   // Stato del flusso di connessione Microsoft Graph.
   let graphDevice = $state(null);
@@ -52,6 +61,14 @@
           api.comparePeriods(period),
         ]);
       meetingList = await api.meetings(period).catch(() => []);
+      [bill, langs, codeStats, heatCells, suggList, idleList] = await Promise.all([
+        api.billing(period).catch(() => null),
+        api.languages(period).catch(() => []),
+        api.codeTotals(period).catch(() => null),
+        api.heat(period).catch(() => []),
+        api.suggestions(period).catch(() => []),
+        api.idleBlocks(period).catch(() => []),
+      ]);
     } catch (e) {
       error = String(e);
     }
@@ -150,6 +167,81 @@
     graphMsg = "Disconnesso.";
   }
 
+  async function loadStandup() {
+    standupTxt = await api.standupText(period).catch((e) => "Errore: " + e);
+  }
+  async function copyStandup() {
+    try { await navigator.clipboard.writeText(standupTxt); } catch {}
+  }
+  async function loadInsights() {
+    insightsTxt = "Generazione in corso…";
+    insightsTxt = await api.llmInsights(period).catch((e) => "Errore: " + e);
+  }
+
+  // Focus / Pomodoro.
+  async function startFocus() {
+    await api.focusStart(0);
+    pollFocus();
+  }
+  async function stopFocus() {
+    await api.focusStop();
+    focusSecs = 0;
+  }
+  async function pollFocus() {
+    focusSecs = await api.focusStatus().catch(() => 0);
+  }
+
+  // Correzione: assegna progetto a un blocco (idle o sample).
+  async function assignProject(sample, project) {
+    if (!project) return;
+    await api.updateSample(sample.id, project, null, null, sample.idle ? false : null);
+    refresh();
+  }
+  async function dropSample(id) {
+    await api.deleteSample(id);
+    refresh();
+  }
+  async function applySuggestion(s, project) {
+    if (!project) return;
+    await api.reassignApp(s.key, project, null);
+    refresh();
+  }
+
+  // Cifratura DB.
+  let encPass = $state("");
+  async function enableEncryption() {
+    try {
+      const msg = await api.enableDbEncryption(encPass);
+      encPass = "";
+      await loadSettings();
+      alert(msg);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  // Onboarding.
+  async function finishOnboarding() {
+    settings.onboarded = true;
+    await api.saveSettings(settings);
+    await api.syncGit();
+    refresh();
+  }
+
+  // Aggiorna lo stato del focus ogni 10s.
+  $effect(() => {
+    const t = setInterval(pollFocus, 10000);
+    return () => clearInterval(t);
+  });
+
+  // Intensità heatmap (0..1) per il colore della cella.
+  let heatMax = $derived(Math.max(1, ...heatCells.map((c) => c.seconds)));
+  function heatAt(wd, h) {
+    const c = heatCells.find((x) => x.weekday === wd && x.hour === h);
+    return c ? c.seconds / heatMax : 0;
+  }
+  const weekdays = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+
   // Carica i dati all'avvio.
   $effect(() => {
     refresh();
@@ -170,15 +262,50 @@
   }
 </script>
 
+{#if settings && !settings.onboarded}
+  <div class="onboard-overlay">
+    <div class="card" style="max-width:520px; width:100%">
+      <div class="brand" style="padding-top:0">Benvenuto in Work<span>Pulse</span></div>
+      <p class="muted">Configura l'essenziale per iniziare a tracciare. Tutto resta in locale.</p>
+      <label class="field">
+        <span>La tua email (per riconoscere i tuoi commit Git)</span>
+        <input bind:value={settings.author_email} placeholder="tu@azienda.it" />
+      </label>
+      <label class="field">
+        <span>Repository Git da tracciare (uno per riga)</span>
+        <textarea rows="3" value={settings.git_repos.join("\n")} oninput={(e) => settings.git_repos = e.target.value.split("\n").map(s=>s.trim()).filter(Boolean)}></textarea>
+      </label>
+      <label class="field">
+        <span>Tariffa oraria di default (€) — opzionale</span>
+        <input type="number" min="0" step="5" bind:value={settings.rates.default_hourly} />
+      </label>
+      <p class="muted">Potrai collegare Microsoft 365, attivare la cifratura e altro nelle Impostazioni.</p>
+      <button class="btn" onclick={finishOnboarding}>Inizia →</button>
+    </div>
+  </div>
+{/if}
+
 <div class="app">
   <aside class="sidebar">
     <div class="brand">Work<span>Pulse</span></div>
     <button class="nav-item" class:active={view === "dashboard"} onclick={() => (view = "dashboard")}>📊 Dashboard</button>
     <button class="nav-item" class:active={view === "journal"} onclick={() => (view = "journal")}>📓 Work Journal</button>
+    <button class="nav-item" class:active={view === "standup"} onclick={() => { view = "standup"; loadStandup(); }}>🗣️ Standup</button>
+    <button class="nav-item" class:active={view === "billing"} onclick={() => (view = "billing")}>💶 Fatturazione</button>
     <button class="nav-item" class:active={view === "analytics"} onclick={() => (view = "analytics")}>📈 Analisi storica</button>
+    <button class="nav-item" class:active={view === "heatmap"} onclick={() => (view = "heatmap")}>🔥 Heatmap</button>
+    <button class="nav-item" class:active={view === "reconcile"} onclick={() => (view = "reconcile")}>🧩 Riconcilia</button>
+    <button class="nav-item" class:active={view === "insights"} onclick={() => (view = "insights")}>🤖 Insight AI</button>
     <button class="nav-item" class:active={view === "timesheet"} onclick={() => (view = "timesheet")}>🗓️ Timesheet</button>
     <button class="nav-item" class:active={view === "settings"} onclick={() => (view = "settings")}>⚙️ Impostazioni</button>
     <div class="spacer"></div>
+    {#if focusSecs > 0}
+      <button class="nav-item" style="background:var(--accent-2);color:white" onclick={stopFocus}>
+        🎯 Focus {Math.ceil(focusSecs / 60)}m — stop
+      </button>
+    {:else}
+      <button class="nav-item" onclick={startFocus}>🎯 Avvia focus</button>
+    {/if}
     <button class="nav-item" onclick={togglePause}>
       {paused ? "▶️ Riprendi tracking" : "⏸️ Pausa tracking"}
     </button>
@@ -241,6 +368,25 @@
           </table>
         </div>
       {/if}
+
+      <div class="grid2" style="margin-top:16px">
+        <div class="card">
+          <h3>Tempo per linguaggio</h3>
+          <Bars rows={langs} />
+        </div>
+        <div class="card">
+          <h3>Codice (commit)</h3>
+          {#if codeStats}
+            <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+              <div class="kpi"><div class="v">{codeStats.commits}</div><div class="k">Commit</div></div>
+              <div class="kpi"><div class="v" style="color:var(--accent-2)">+{codeStats.additions}</div><div class="k">Righe agg.</div></div>
+              <div class="kpi"><div class="v" style="color:var(--warn)">-{codeStats.deletions}</div><div class="k">Righe rim.</div></div>
+            </div>
+          {:else}
+            <p class="muted">Nessun commit nel periodo.</p>
+          {/if}
+        </div>
+      </div>
     {/if}
 
     {#if view === "journal"}
@@ -289,6 +435,113 @@
       <div class="card" style="margin-top:16px">
         <h3>Trend giornaliero — focus</h3>
         <Bars rows={trend.map((d) => ({ key: d.day, seconds: d.focus_seconds }))} green />
+      </div>
+    {/if}
+
+    {#if view === "standup"}
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">Standup — recap copiabile</h3>
+          <div class="row">
+            <button class="btn ghost" onclick={loadStandup}>↻ Rigenera</button>
+            <button class="btn" onclick={copyStandup}>📋 Copia</button>
+          </div>
+        </div>
+        <pre style="white-space:pre-wrap; font-family:inherit; margin-top:12px">{standupTxt || "—"}</pre>
+      </div>
+    {/if}
+
+    {#if view === "billing"}
+      <div class="card">
+        <h3>Fatturazione per cliente</h3>
+        {#if bill && bill.items.length}
+          <table>
+            <thead><tr><th>Cliente</th><th>Tracciato</th><th>Fatturabile</th><th>Tariffa</th><th>Importo</th></tr></thead>
+            <tbody>
+              {#each bill.items as it}
+                <tr>
+                  <td>{it.key}</td>
+                  <td>{humanDuration(it.seconds)}</td>
+                  <td>{humanDuration(it.billable_seconds)}</td>
+                  <td>{bill.currency_hint}{it.hourly_rate}/h</td>
+                  <td><strong>{bill.currency_hint}{it.amount.toFixed(2)}</strong></td>
+                </tr>
+              {/each}
+            </tbody>
+            <tfoot>
+              <tr><td colspan="4" style="text-align:right">Totale</td><td><strong>{bill.currency_hint}{bill.total.toFixed(2)}</strong></td></tr>
+            </tfoot>
+          </table>
+          <p class="muted" style="margin-top:10px">Imposta tariffe e arrotondamento nelle Impostazioni. Export grezzo via Timesheet → CSV.</p>
+        {:else}
+          <p class="muted">Nessun dato fatturabile nel periodo.</p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if view === "heatmap"}
+      <div class="card">
+        <h3>Heatmap produttività (giorno × ora)</h3>
+        <div style="overflow-x:auto">
+          <table style="border-collapse:separate; border-spacing:2px">
+            <tbody>
+              {#each weekdays as wd, wi}
+                <tr>
+                  <td class="muted" style="border:none; padding:2px 6px">{wd}</td>
+                  {#each Array(24) as _, h}
+                    <td title="{wd} {h}:00" style="border:none; width:14px; height:14px; padding:0; border-radius:3px; background:rgba(47,129,247,{heatAt(wi, h)})"></td>
+                  {/each}
+                </tr>
+              {/each}
+              <tr><td style="border:none"></td>{#each Array(24) as _, h}<td class="muted" style="border:none; font-size:9px; text-align:center">{h % 3 === 0 ? h : ""}</td>{/each}</tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {/if}
+
+    {#if view === "reconcile"}
+      <div class="card">
+        <h3>Riconcilia blocchi inattivi ({idleList.length})</h3>
+        <p class="muted" style="margin-top:0">Assegna i periodi di inattività: erano lavoro, una call offline o una pausa?</p>
+        {#if idleList.length === 0}
+          <p class="muted">Nessun blocco idle da riconciliare.</p>
+        {:else}
+          {#each idleList as s}
+            <div class="row" style="justify-content:space-between; border-bottom:1px solid var(--border); padding:8px 0">
+              <span>{new Date(s.start).toLocaleString()} · {humanDuration(s.seconds)}</span>
+              <div class="row">
+                <input placeholder="progetto" style="width:120px" onchange={(e) => assignProject(s, e.target.value)} />
+                <button class="btn ghost" onclick={() => dropSample(s.id)}>🗑️</button>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+
+      {#if suggList.length}
+        <div class="card" style="margin-top:16px">
+          <h3>Suggerimenti regole</h3>
+          {#each suggList as s}
+            <div class="row" style="justify-content:space-between; padding:6px 0">
+              <span>{s.message} <span class="muted">({humanDuration(s.seconds)})</span></span>
+              <input placeholder="→ progetto" style="width:120px" onchange={(e) => applySuggestion(s, e.target.value)} />
+            </div>
+          {/each}
+        </div>
+      {/if}
+    {/if}
+
+    {#if view === "insights"}
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">Insight AI (LLM locale)</h3>
+          <button class="btn" onclick={loadInsights}>✨ Genera</button>
+        </div>
+        {#if settings && !settings.llm_enabled}
+          <p class="muted">Abilita l'LLM locale (es. Ollama) nelle Impostazioni.</p>
+        {/if}
+        <pre style="white-space:pre-wrap; font-family:inherit; margin-top:12px">{insightsTxt || "Premi Genera per un'analisi del periodo."}</pre>
       </div>
     {/if}
 
@@ -357,6 +610,73 @@
             <input type="checkbox" style="width:auto" bind:checked={settings.daily_summary} />
             <span style="margin:0">Notifica di riepilogo a fine giornata</span>
           </label>
+
+          <hr style="border-color:var(--border); margin:18px 0" />
+          <h3>💶 Fatturazione</h3>
+          <div class="row">
+            <label class="field" style="flex:1">
+              <span>Tariffa oraria di default (€)</span>
+              <input type="number" min="0" step="5" bind:value={settings.rates.default_hourly} />
+            </label>
+            <label class="field" style="flex:1">
+              <span>Arrotondamento (minuti)</span>
+              <input type="number" min="0" step="5" bind:value={settings.billing_round_minutes} />
+            </label>
+          </div>
+
+          <hr style="border-color:var(--border); margin:18px 0" />
+          <h3>🎯 Focus & nudge</h3>
+          <div class="row">
+            <label class="field" style="flex:1">
+              <span>Durata Pomodoro (min)</span>
+              <input type="number" min="5" bind:value={settings.pomodoro_minutes} />
+            </label>
+            <label class="field" style="flex:1">
+              <span>Nudge pausa dopo (min, 0=off)</span>
+              <input type="number" min="0" bind:value={settings.nudge_no_break_minutes} />
+            </label>
+            <label class="field" style="flex:1">
+              <span>Nudge comunicazione (min, 0=off)</span>
+              <input type="number" min="0" bind:value={settings.nudge_comm_minutes} />
+            </label>
+          </div>
+
+          <hr style="border-color:var(--border); margin:18px 0" />
+          <h3>🔒 Privacy & cifratura</h3>
+          <label class="field">
+            <span>App personali (auto-pausa quando attive, una per riga)</span>
+            <textarea rows="2" value={settings.personal_apps.join("\n")} oninput={(e) => settings.personal_apps = e.target.value.split("\n").map(s=>s.trim()).filter(Boolean)}></textarea>
+          </label>
+          <label class="field row" style="gap:8px; align-items:center">
+            <input type="checkbox" style="width:auto" bind:checked={settings.private_autopause} />
+            <span style="margin:0">Auto-pausa su finestre in incognito/privato</span>
+          </label>
+          {#if settings.db_encrypted}
+            <p class="tag" style="border-color:var(--accent-2)">✓ Database cifrato a riposo</p>
+          {:else}
+            <div class="row">
+              <input type="password" placeholder="passphrase (min 8)" bind:value={encPass} style="flex:1" />
+              <button class="btn ghost" onclick={enableEncryption}>🔐 Cifra il database</button>
+            </div>
+          {/if}
+
+          <hr style="border-color:var(--border); margin:18px 0" />
+          <h3>🤖 LLM locale (Insight AI)</h3>
+          <label class="field row" style="gap:8px; align-items:center">
+            <input type="checkbox" style="width:auto" bind:checked={settings.llm_enabled} />
+            <span style="margin:0">Abilita insight con LLM locale</span>
+          </label>
+          <div class="row">
+            <label class="field" style="flex:2">
+              <span>Endpoint (es. Ollama)</span>
+              <input bind:value={settings.llm_endpoint} />
+            </label>
+            <label class="field" style="flex:1">
+              <span>Modello</span>
+              <input bind:value={settings.llm_model} />
+            </label>
+          </div>
+
           <div class="row">
             <button class="btn" onclick={saveSettings}>💾 Salva</button>
             <button class="btn ghost" onclick={() => api.purge(settings.retention_days).then(refresh)}>

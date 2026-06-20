@@ -39,7 +39,18 @@ impl Dimension {
 impl Store {
     /// Apre (o crea) il DB al percorso indicato e applica lo schema.
     pub fn open(path: &str) -> Result<Self> {
+        Self::open_with_key(path, None)
+    }
+
+    /// Apre il DB con cifratura a riposo opzionale (SQLCipher). Se `key` e' `Some`,
+    /// il file e' cifrato AES-256 con la passphrase data (deve essere quella usata
+    /// alla creazione). Con `None` il comportamento e' quello di uno SQLite normale.
+    pub fn open_with_key(path: &str, key: Option<&str>) -> Result<Self> {
         let conn = Connection::open(path)?;
+        if let Some(k) = key {
+            // La PRAGMA key va impostata PRIMA di qualsiasi altra operazione.
+            conn.pragma_update(None, "key", k)?;
+        }
         conn.pragma_update(None, "journal_mode", "WAL")?;
         let store = Store { conn };
         store.migrate()?;
@@ -52,6 +63,16 @@ impl Store {
         let store = Store { conn };
         store.migrate()?;
         Ok(store)
+    }
+
+    /// Migra un DB in chiaro verso un nuovo file cifrato (SQLCipher export).
+    /// Usata una volta quando l'utente attiva la cifratura su dati esistenti.
+    pub fn export_encrypted(src: &str, dst: &str, key: &str) -> Result<()> {
+        let conn = Connection::open(src)?;
+        conn.execute("ATTACH DATABASE ?1 AS enc KEY ?2", params![dst, key])?;
+        conn.query_row("SELECT sqlcipher_export('enc')", [], |_| Ok(()))?;
+        conn.execute("DETACH DATABASE enc", [])?;
+        Ok(())
     }
 
     fn migrate(&self) -> Result<()> {
@@ -75,13 +96,15 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_samples_project ON samples(project);
 
             CREATE TABLE IF NOT EXISTS commits (
-                hash     TEXT PRIMARY KEY,
-                repo     TEXT NOT NULL,
-                author   TEXT NOT NULL,
-                message  TEXT NOT NULL,
-                branch   TEXT NOT NULL,
-                project  TEXT,
-                at       TEXT NOT NULL
+                hash      TEXT PRIMARY KEY,
+                repo      TEXT NOT NULL,
+                author    TEXT NOT NULL,
+                message   TEXT NOT NULL,
+                branch    TEXT NOT NULL,
+                project   TEXT,
+                at        TEXT NOT NULL,
+                additions INTEGER NOT NULL DEFAULT 0,
+                deletions INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_commits_at ON commits(at);
 
@@ -170,9 +193,12 @@ impl Store {
     pub fn upsert_commit(&self, c: &GitCommit) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO commits
-                (hash,repo,author,message,branch,project,at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![c.hash, c.repo, c.author, c.message, c.branch, c.project, c.at.to_rfc3339()],
+                (hash,repo,author,message,branch,project,at,additions,deletions)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                c.hash, c.repo, c.author, c.message, c.branch, c.project,
+                c.at.to_rfc3339(), c.additions, c.deletions,
+            ],
         )?;
         Ok(())
     }
@@ -249,7 +275,7 @@ impl Store {
         to: DateTime<Utc>,
     ) -> Result<Vec<GitCommit>> {
         let mut stmt = self.conn.prepare(
-            "SELECT repo,hash,author,message,branch,project,at
+            "SELECT repo,hash,author,message,branch,project,at,additions,deletions
              FROM commits WHERE at >= ?1 AND at < ?2 ORDER BY at DESC",
         )?;
         let rows = stmt
@@ -265,10 +291,68 @@ impl Store {
                     at: DateTime::parse_from_rfc3339(&at)
                         .map(|d| d.with_timezone(&Utc))
                         .unwrap_or_else(|_| Utc::now()),
+                    additions: r.get(7)?,
+                    deletions: r.get(8)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Aggiorna i campi modificabili di un sample (correzione manuale).
+    /// I `None` lasciano il campo invariato; per azzerare un campo passare `Some("")`.
+    pub fn update_sample(
+        &self,
+        id: i64,
+        project: Option<&str>,
+        ticket: Option<&str>,
+        client: Option<&str>,
+        idle: Option<bool>,
+    ) -> Result<()> {
+        let norm = |v: Option<&str>| v.map(|s| if s.is_empty() { None } else { Some(s.to_string()) });
+        if let Some(p) = norm(project) {
+            self.conn.execute("UPDATE samples SET project=?1 WHERE id=?2", params![p, id])?;
+        }
+        if let Some(t) = norm(ticket) {
+            self.conn.execute("UPDATE samples SET ticket=?1 WHERE id=?2", params![t, id])?;
+        }
+        if let Some(c) = norm(client) {
+            self.conn.execute("UPDATE samples SET client=?1 WHERE id=?2", params![c, id])?;
+        }
+        if let Some(b) = idle {
+            self.conn.execute("UPDATE samples SET idle=?1 WHERE id=?2", params![b as i64, id])?;
+        }
+        Ok(())
+    }
+
+    /// Riassegna in blocco tutti i sample di un'app a un progetto/cliente
+    /// (utile per correggere classificazioni sistematiche).
+    pub fn reassign_app(&self, app: &str, project: &str, client: Option<&str>) -> Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE samples SET project=?1, client=?2 WHERE app=?3",
+            params![project, client, app],
+        )?;
+        Ok(n)
+    }
+
+    /// Elimina un sample (correzione manuale).
+    pub fn delete_sample(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM samples WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    /// Blocchi di inattivita' (idle) di durata significativa, da riconciliare.
+    pub fn idle_blocks(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        min_seconds: i64,
+    ) -> Result<Vec<ActivitySample>> {
+        let all = self.samples_between(from, to)?;
+        Ok(all
+            .into_iter()
+            .filter(|s| s.idle && s.seconds >= min_seconds)
+            .collect())
     }
 
     /// Cancella tutti i dati precedenti a una data (diritto all'oblio / retention).

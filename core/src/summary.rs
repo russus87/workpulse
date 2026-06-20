@@ -146,6 +146,8 @@ mod tests {
             branch: "main".into(),
             project: Some("PAM".into()),
             at: Utc::now(),
+            additions: 0,
+            deletions: 0,
         }
     }
 

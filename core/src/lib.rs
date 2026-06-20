@@ -10,13 +10,18 @@
 //!   6. `summary`   — riepilogo in linguaggio naturale (template locale).
 
 pub mod aggregate;
+pub mod billing;
 pub mod classify;
+pub mod devstats;
 pub mod error;
 pub mod git;
+pub mod heatmap;
 pub mod journal;
 pub mod model;
 pub mod report;
+pub mod standup;
 pub mod storage;
+pub mod suggest;
 pub mod summary;
 pub mod trends;
 

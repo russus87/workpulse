@@ -88,6 +88,10 @@ pub struct GitCommit {
     pub branch: String,
     pub project: Option<String>,
     pub at: DateTime<Utc>,
+    /// Righe aggiunte nel commit (metriche dev).
+    pub additions: i64,
+    /// Righe rimosse nel commit.
+    pub deletions: i64,
 }
 
 /// Un meeting importato da un calendario esterno (es. Outlook/Teams via Graph).

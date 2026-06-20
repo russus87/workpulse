@@ -27,8 +27,13 @@ telemetria, nessun invio remoto.
 | **Work Journal** | Genera attivita' svolte, ticket toccati, commit effettuati, tempo investito — per giorno e per progetto. |
 | **Timesheet** | Generazione giornaliera / settimanale / mensile, ripartita per progetto. |
 | **Productivity Analytics** | Focus time, context switching, interruzioni, trend. |
-| **AI Summary** | Riepilogo testuale della giornata (template locale, opzione LLM disattivata di default). |
-| **Dashboard** | KPI, grafici a barre, analisi storica, confronti temporali. |
+| **AI Summary** | Riepilogo testuale della giornata (template locale) + **Insight LLM locale** opzionale (Ollama). |
+| **Fatturazione** | Tariffe per cliente, arrotondamento, importi fatturabili. |
+| **Standup** | Recap copiabile per il daily + metriche dev (linguaggi, righe +/-). |
+| **Focus mode** | Pomodoro + nudge anti-distrazione (pausa, troppa comunicazione). |
+| **Correzione & riconcilia** | Riassegna progetto/cliente, blocchi idle, regole suggerite. |
+| **Privacy** | Auto-pausa (app personali/incognito) + cifratura DB a riposo (SQLCipher). |
+| **Dashboard** | KPI, grafici a barre, analisi storica, heatmap, confronti temporali. |
 
 ## Sorgenti dati
 

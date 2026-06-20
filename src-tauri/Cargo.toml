@@ -1,6 +1,6 @@
 [package]
 name = "workpulse"
-version = "0.1.2"
+version = "0.2.0"
 description = "WorkPulse - tracciamento automatico del lavoro: tempo per progetto/ticket/cliente, work journal e riepiloghi"
 authors = ["Antonio Russo"]
 license = "MIT"
@@ -31,5 +31,7 @@ tauri-plugin-process = "2"
 tauri-plugin-autostart = "2"
 # La logica vera (tracking, storage, report) vive nel crate "core".
 workpulse-core = { path = "../core" }
-# Client HTTP leggero (TLS rustls) per i connettori esterni (Microsoft Graph).
+# Client HTTP leggero (TLS rustls) per i connettori esterni (Microsoft Graph, LLM locale).
 ureq = { version = "2", features = ["json"] }
+# Passphrase di cifratura DB salvata nel portachiavi del sistema operativo (no system deps al build).
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
