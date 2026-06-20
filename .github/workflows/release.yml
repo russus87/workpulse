@@ -56,7 +56,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "WorkPulse ${{ github.ref_name }}"
-          releaseDraft: true
+          releaseDraft: false
           releaseBody: "Pacchetti generati automaticamente. .pkg.tar.zst per Arch Linux."
           args: ${{ matrix.args }}
 
