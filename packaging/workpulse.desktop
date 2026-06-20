@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=WorkPulse
+Comment=Tracciamento automatico del lavoro: tempo, journal, timesheet e analytics
+Exec=workpulse
+Icon=workpulse
+Terminal=false
+Categories=Office;Utility;ProjectManagement;
+Keywords=produttivita;tracking;timesheet;journal;tempo;progetti;ticket;focus;

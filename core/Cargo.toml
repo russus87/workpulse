@@ -1,0 +1,27 @@
+# Crate "core": tutta la logica di WorkPulse, riutilizzabile e senza Tauri.
+# Contiene il modello dati, la persistenza locale (SQLite via rusqlite "bundled",
+# nessuna dipendenza di sistema), la classificazione delle attivita' (progetto/
+# ticket/cliente), l'aggregazione dei tempi e la generazione di journal e riepiloghi.
+#
+# La cattura della finestra attiva (specifica per OS) NON sta qui: il core riceve
+# degli "snapshot" gia' pronti, cosi' resta puro e testabile su ogni piattaforma.
+[package]
+name = "workpulse-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# Date/orari con fuso: usato ovunque per i sample e l'aggregazione giornaliera.
+chrono = { version = "0.4", features = ["serde"] }
+# SQLite incorporato (compila il C di sqlite): zero dipendenze di sistema,
+# ottimo per pacchettizzare su tutte le piattaforme.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Regole di classificazione (riconoscere ticket tipo PAM-123, host del browser, ecc.).
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

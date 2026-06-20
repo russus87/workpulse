@@ -1,0 +1,40 @@
+# PKGBUILD per WorkPulse — genera un pacchetto Arch .pkg.tar.zst.
+# Pensato per la CI: la versione viene iniettata da release.yml (sed su pkgver).
+# Compila dal sorgente gia' presente nel repo e impacchetta il binario.
+pkgname=workpulse
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Tracciamento automatico del lavoro: tempo per progetto/ticket/cliente, work journal, timesheet e analytics (Rust + Tauri + Svelte)"
+arch=('x86_64')
+url="https://github.com/russus87/workpulse"
+license=('MIT')
+# Dipendenze a runtime: webkit per la finestra Tauri, gtk3 per la UI nativa.
+# xdotool/xorg-xprop servono alla cattura della finestra attiva su X11 (opzionali).
+depends=('webkit2gtk-4.1' 'gtk3')
+optdepends=('xdotool: cattura finestra attiva su X11'
+            'xorg-xprop: rilevamento applicazione su X11')
+makedepends=('rust' 'cargo' 'nodejs' 'npm')
+options=('!strip' '!lto')
+
+# Il PKGBUILD sta in packaging/, quindi la root del repo e' la cartella superiore.
+_repo() { echo "$startdir/.."; }
+
+build() {
+    cd "$(_repo)"
+    npm install
+    # Si compila con la CLI di Tauri (modalita' produzione, frontend incorporato).
+    # --no-bundle: niente installer, il pacchetto lo fa makepkg.
+    npm run tauri build -- --no-bundle
+}
+
+package() {
+    cd "$(_repo)"
+    # In un workspace Cargo il binario finisce in target/ alla root del repo.
+    install -Dm755 "target/release/workpulse" "$pkgdir/usr/bin/workpulse"
+    install -Dm644 "packaging/workpulse.desktop" \
+        "$pkgdir/usr/share/applications/workpulse.desktop"
+    install -Dm644 "src-tauri/icons/128x128.png" \
+        "$pkgdir/usr/share/icons/hicolor/128x128/apps/workpulse.png"
+    install -Dm644 "src-tauri/icons/icon.png" \
+        "$pkgdir/usr/share/icons/hicolor/512x512/apps/workpulse.png"
+}

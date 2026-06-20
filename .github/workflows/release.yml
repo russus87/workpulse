@@ -1,0 +1,95 @@
+# Compila e pubblica i pacchetti desktop per Linux, Windows e macOS.
+# Si attiva quando spingi un tag tipo v0.1.0 (oppure manualmente da GitHub).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest      # Mac Apple Silicon (M1+)
+            args: "--target aarch64-apple-darwin"
+          - platform: ubuntu-22.04      # Linux (.deb, .rpm, .AppImage)
+            args: ""
+          - platform: windows-latest    # Windows (.exe NSIS, .msi)
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Dipendenze di sistema (solo Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Installa dipendenze frontend
+        run: npm install
+
+      - name: Build + bundle + release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "WorkPulse ${{ github.ref_name }}"
+          releaseDraft: true
+          releaseBody: "Pacchetti generati automaticamente. .pkg.tar.zst per Arch Linux."
+          args: ${{ matrix.args }}
+
+  # --- Arch Linux: pacchetto nativo .pkg.tar.zst via makepkg ---
+  arch:
+    runs-on: ubuntu-latest
+    needs: build              # la release (draft) esiste gia', creata dal job build
+    permissions:
+      contents: write
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Strumenti base nel container
+        run: pacman -Syu --noconfirm git nodejs npm rust base-devel webkit2gtk-4.1 gtk3 librsvg sudo
+
+      - uses: actions/checkout@v4
+
+      - name: Inietta la versione dal tag nel PKGBUILD
+        run: |
+          VER="${GITHUB_REF_NAME#v}"        # v0.1.0 -> 0.1.0
+          sed -i "s/^pkgver=.*/pkgver=${VER}/" packaging/PKGBUILD
+          echo "Versione pacchetto: ${VER}"
+
+      - name: Build del pacchetto (makepkg non gira da root)
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          sudo -u builder bash -c 'cd packaging && makepkg -f --noconfirm --nodeps'
+
+      - name: Carica il .pkg.tar.zst nella release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: packaging/*.pkg.tar.zst
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
